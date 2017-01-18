@@ -1,3 +1,9 @@
-This is a Simple Irc Bot
+This is a Simple Irc Bot, customized to resolve
+Bugzilla and Gerrit ids.
 
-Just specify the room, add your matchers and responses and launch it.
+Just specify the room, the Bugzilla and Gerrit paramenters
+and launch it.
+
+Credit goes to:
+ http://kevin.glowacz.info/2009/03/simple-irc-bot-in-ruby.html
+ https://github.com/kjg/simpleircbot

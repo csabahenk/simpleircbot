@@ -2,17 +2,30 @@
 
 require 'socket'
 require 'optparse'
+require 'open-uri'
+require 'cgi'
+require 'shellwords'
+require 'yaml'
 
 class SimpleIrcBot
 
-  def initialize(server:, port:, channel:, nick:)
+  def initialize(server:, port:, channel:, nick:,
+                 bugzilla_url:, gerrit_url:, gerrit_user:, gerrit_port:)
     @channel = channel
     @socket = TCPSocket.open(server, port)
     @nick = nick
+    @bugzilla = bugzilla_url.sub(%r@\Ahttps?://@, "")
+    @gerrit = gerrit_url.sub(%r@\Ahttps?://@, "")
+    @gerrit_user = gerrit_user
+    @gerrit_port = gerrit_port
     say "NICK #{nick}"
     say "USER ircbot 0 * #{nick}"
     say "JOIN ##{@channel}"
     say_to_chan "#{1.chr}ACTION is here to help#{1.chr}"
+    say_to_chan "Whenever I see {bz|bug} <bug-id>, {gerrit|review|change} <change-number|change-id|git-id> ..."
+    say_to_chan "... -- or eg. BZ <bug-id> ... I don't care about case -- ..."
+    say_to_chan "... or #{@bugzilla}/<bug-id>, #{@gerrit}/<change-number|change-id|git-id> ..."
+    say_to_chan "... I tell it like it is!".upcase
   end
 
   def say(msg)
@@ -20,8 +33,8 @@ class SimpleIrcBot
     @socket.puts msg
   end
 
-  def say_to_chan(msg)
-    say "PRIVMSG ##{@channel} :#{msg}"
+  def say_to_chan(*msg)
+    say "PRIVMSG ##{@channel} :#{msg.join ", "}"
   end
 
   def run
@@ -38,9 +51,49 @@ class SimpleIrcBot
         content = $~[1]
 
         #put matchers here
-        if content.match(/#{@nick}/)
-          say_to_chan('your response')
-        end
+
+        # Bugzilla...
+        bzrx = %r@(?:#{@bugzilla}/(?:show_bug.cgi\?id=)?|(?:\A|\s)(?:bz|bug):?\s+)(\d+)@i
+        process_bugzilla = proc { |bz,decor=""|
+          title = "Bug not found :("
+          bugurl = "https://#{@bugzilla}/#{bz}"
+          open(bugurl) {|f|
+            while l=f.gets
+              if l =~ %r@<title>(.*)</title>@
+                # CGI.unescapeHTML does not know of ndash :/
+                title = CGI.unescapeHTML $1.gsub("&ndash;", "–")
+                break
+              end
+            end
+          }
+          say_to_chan decor + bugurl, title
+        }
+        content.scan(bzrx).flatten.uniq.each &process_bugzilla
+
+        # Gerrit...
+        content.scan(
+          %r@(?:#{@gerrit}/(?:#/c/)?|(?:\A|\s)(?:change|review|gerrit):?\s+)(\d+|I?[\da-z]{6,})@i
+        ).flatten.uniq.each { |change|
+          changedata = open(
+            "|ssh #{@gerrit_user.shellescape}@#{@gerrit.shellescape} -p #{@gerrit_port} " \
+            "gerrit query --format=json --patch-sets #{change}", &:read)
+          changeinfo = begin
+            # what comes is a JSON stream, ie. concatenated JSON objects,
+            # but JSON can do only a single object, so instead we use YAML
+            changeinfo = YAML.load changedata
+          rescue Psych::SyntaxError
+          end
+          case changeinfo
+          when Hash
+            say_to_chan *changeinfo.values_at("url", "subject")
+            changeinfo["commitMessage"].each_line {|l|
+              l =~ /\A\s*#{bzrx}\s*\Z/ && process_bugzilla[$1, "`-> "]
+            }
+          else
+            say_to_chan "#{@gerrit}: change #{change} not found"
+          end
+        }
+
       end
     end
   end
@@ -55,7 +108,11 @@ OPTS = {
   server: "irc.freenode.net",
   port: 6667,
   channel: String,
-  nick: "batty"
+  nick: "batty",
+  bugzilla_url: String,
+  gerrit_user: String,
+  gerrit_port: 29418,
+  gerrit_url: String
 }.map { |o,d| [o, [d]] }.to_h
 fixer = { Fixnum => Integer }
 OptionParser.new { |op|
