@@ -1,14 +1,16 @@
 #!/usr/bin/env ruby
 
 require 'socket'
+require 'optparse'
 
 class SimpleIrcBot
 
-  def initialize(server, port, channel)
+  def initialize(server:, port:, channel:, nick:)
     @channel = channel
     @socket = TCPSocket.open(server, port)
-    say "NICK IrcBot"
-    say "USER ircbot 0 * IrcBot"
+    @nick = nick
+    say "NICK #{nick}"
+    say "USER ircbot 0 * #{nick}"
     say "JOIN ##{@channel}"
     say_to_chan "#{1.chr}ACTION is here to help#{1.chr}"
   end
@@ -36,7 +38,7 @@ class SimpleIrcBot
         content = $~[1]
 
         #put matchers here
-        if content.match()
+        if content.match(/#{@nick}/)
           say_to_chan('your response')
         end
       end
@@ -49,7 +51,38 @@ class SimpleIrcBot
   end
 end
 
-bot = SimpleIrcBot.new("irc.freenode.net", 6667, 'ChannelName')
+OPTS = {
+  server: "irc.freenode.net",
+  port: 6667,
+  channel: String,
+  nick: "batty"
+}.map { |o,d| [o, [d]] }.to_h
+fixer = { Fixnum => Integer }
+OptionParser.new { |op|
+   OPTS.each { |o,w|
+     # Mangling OPTS to OptionParser options in a disgraced manner
+     # - opt_name: <scalar> becomes:
+     #   op.on("-o", "--opt-name", fixer[<scalar>.class], <scalar>.to_s) {...}
+     #   where fixer is needed to map arbitrary classes into the class set
+     #   accepted by OptionParser
+     # - opt_name: <class> becomes: op.on("-o", "--opt-name", <class>) {...}
+     op.on("-#{o[0]}", "--#{o.to_s.gsub "_", "-"}=VAL", *(
+       (Class === w[0] ? [] : [w[0].class]) << w[0]
+     ).instance_eval {|a|
+         [fixer[a[0]]||a[0]] + a[1..-1].map(&:to_s)
+     }) { |v| OPTS[o] << v }
+   }
+}.parse!
+OPTS.each { |o,w|
+  v = w[1] || w[0]
+  if Class === v
+    puts "missing value for --#{o}"
+    exit 1
+  end
+  OPTS[o] = v
+}
+
+bot = SimpleIrcBot.new(**OPTS)
 
 trap("INT"){ bot.quit }
 
