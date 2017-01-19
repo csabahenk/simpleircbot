@@ -144,12 +144,12 @@ class SimpleIrcBot
     end
     case changeinfo
     when Hash
-      %w[url subject commitMessage].instance_eval {
+      changeinfo = %w[url subject commitMessage].instance_eval {
         zip(changeinfo.values_at *self).to_h
       }
-    else
-      changeinfo
+      changeinfo.values.include? nil and changeinfo = nil
     end
+    changeinfo
   end
 
   BUGZILLA_TOKENS = %w[bz bug bugzilla]
