@@ -18,6 +18,7 @@ class SimpleIrcBot
     @gerrit = gerrit_url.sub(%r@\Ahttps?://@, "")
     @gerrit_user = gerrit_user
     @gerrit_port = gerrit_port
+    @cache = {}
     say "NICK #{nick}"
     say "USER ircbot 0 * #{nick}"
     say "JOIN ##{@channel}"
@@ -35,6 +36,23 @@ class SimpleIrcBot
 
   def say_to_chan(*msg)
     say "PRIVMSG ##{@channel} :#{msg.join ", "}"
+  end
+
+  def cache_get *keys
+    value = @cache[keys]
+    puts "CACHE: #{value ? "hit" : "miss"} #{keys.inspect}"
+    value
+  end
+
+  def cache_add value, *keys
+    @cache[keys] = value
+  end
+
+  def cache_provide *keys
+    value = cache_get *keys
+    value and return value
+    value = yield *keys
+    cache_add value, *keys
   end
 
   def run
@@ -55,16 +73,19 @@ class SimpleIrcBot
         # Bugzilla...
         bzrx = %r@(?:#{@bugzilla}/(?:show_bug.cgi\?id=)?|(?:\A|\s)(?:bz|bug):?\s+)(\d+)@i
         process_bugzilla = proc { |bz,decor=""|
-          title = "Bug not found :("
           bugurl = "https://#{@bugzilla}/#{bz}"
-          open(bugurl) {|f|
-            while l=f.gets
-              if l =~ %r@<title>(.*)</title>@
-                # CGI.unescapeHTML does not know of ndash :/
-                title = CGI.unescapeHTML $1.gsub("&ndash;", "–")
-                break
+          title = cache_provide(:bugzilla, bz) {
+            title = "Bug not found :("
+            open(bugurl) {|f|
+              while l=f.gets
+                if l =~ %r@<title>(.*)</title>@
+                  # CGI.unescapeHTML does not know of ndash :/
+                  title = CGI.unescapeHTML $1.gsub("&ndash;", "–")
+                  break
+                end
               end
-            end
+            }
+            title
           }
           say_to_chan decor + bugurl, title
         }
@@ -74,15 +95,25 @@ class SimpleIrcBot
         content.scan(
           %r@(?:#{@gerrit}/(?:#/c/)?|(?:\A|\s)(?:change|review|gerrit):?\s+)(\d+|I?[\da-z]{6,})@i
         ).flatten.uniq.each { |change|
-          changedata = open(
-            "|ssh #{@gerrit_user.shellescape}@#{@gerrit.shellescape} -p #{@gerrit_port} " \
-            "gerrit query --format=json --patch-sets #{change}", &:read)
-          changeinfo = begin
-            # what comes is a JSON stream, ie. concatenated JSON objects,
-            # but JSON can do only a single object, so instead we use YAML
-            changeinfo = YAML.load changedata
-          rescue Psych::SyntaxError
-          end
+          changeinfo = cache_provide(:gerrit, change) {
+            changedata = open(
+              "|ssh #{@gerrit_user.shellescape}@#{@gerrit.shellescape} -p #{@gerrit_port} " \
+              "gerrit query --format=json --patch-sets #{change}", &:read)
+            changeinfo = begin
+              # what comes is a JSON stream, ie. concatenated JSON objects,
+              # but JSON can do only a single object, so instead we use YAML
+              changeinfo = YAML.load changedata
+            rescue Psych::SyntaxError
+            end
+            case changeinfo
+            when Hash
+              %w[url subject commitMessage].instance_eval {
+                zip(changeinfo.values_at *self).to_h
+              }
+            else
+              changeinfo
+            end
+          }
           case changeinfo
           when Hash
             say_to_chan *changeinfo.values_at("url", "subject")
