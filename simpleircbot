@@ -10,15 +10,21 @@ require 'yaml'
 class SimpleIrcBot
 
   def initialize(server:, port:, channel:, nick:,
-                 bugzilla_url:, gerrit_url:, gerrit_user:, gerrit_port:)
+                 bugzilla_url:, gerrit_url:, gerrit_user:, gerrit_port:,
+                 cache_prefetch:)
     @channel = channel
-    @socket = TCPSocket.open(server, port)
     @nick = nick
     @bugzilla = bugzilla_url.sub(%r@\Ahttps?://@, "")
     @gerrit = gerrit_url.sub(%r@\Ahttps?://@, "")
     @gerrit_user = gerrit_user
     @gerrit_port = gerrit_port
     @cache = {}
+    cache_prefetch.each { |token|
+      service, id = token.split(":", 2)
+      service = service.to_sym
+      cache_fetch service, id
+    }
+    @socket = TCPSocket.open(server, port)
     say "NICK #{nick}"
     say "USER ircbot 0 * #{nick}"
     say "JOIN ##{@channel}"
@@ -55,6 +61,52 @@ class SimpleIrcBot
     cache_add value, *keys
   end
 
+  def cache_fetch service, id
+    cache_provide service, id, &method(:fetch)
+  end
+
+  def fetch service, id
+    send "fetch_#{service}", id
+  end
+
+  def bugzilla_url bz
+    "https://#{@bugzilla}/#{bz}"
+  end
+
+  def fetch_bugzilla bz
+    title = "Bug not found :("
+    open(bugzilla_url bz) {|f|
+      while l=f.gets
+        if l =~ %r@<title>(.*)</title>@
+          # CGI.unescapeHTML does not know of ndash :/
+          title = CGI.unescapeHTML $1.gsub("&ndash;", "–")
+          break
+        end
+      end
+    }
+    title
+  end
+
+  def fetch_gerrit change
+    changedata = open(
+      "|ssh #{@gerrit_user.shellescape}@#{@gerrit.shellescape} -p #{@gerrit_port} " \
+      "gerrit query --format=json --patch-sets #{change}", &:read)
+    changeinfo = begin
+      # what comes is a JSON stream, ie. concatenated JSON objects,
+      # but JSON can do only a single object, so instead we use YAML
+      changeinfo = YAML.load changedata
+    rescue Psych::SyntaxError
+    end
+    case changeinfo
+    when Hash
+      %w[url subject commitMessage].instance_eval {
+        zip(changeinfo.values_at *self).to_h
+      }
+    else
+      changeinfo
+    end
+  end
+
   def run
     until @socket.eof? do
       msg = @socket.gets
@@ -73,21 +125,7 @@ class SimpleIrcBot
         # Bugzilla...
         bzrx = %r@(?:#{@bugzilla}/(?:show_bug.cgi\?id=)?|(?:\A|\s)(?:bz|bug):?\s+)(\d+)@i
         process_bugzilla = proc { |bz,decor=""|
-          bugurl = "https://#{@bugzilla}/#{bz}"
-          title = cache_provide(:bugzilla, bz) {
-            title = "Bug not found :("
-            open(bugurl) {|f|
-              while l=f.gets
-                if l =~ %r@<title>(.*)</title>@
-                  # CGI.unescapeHTML does not know of ndash :/
-                  title = CGI.unescapeHTML $1.gsub("&ndash;", "–")
-                  break
-                end
-              end
-            }
-            title
-          }
-          say_to_chan decor + bugurl, title
+          say_to_chan decor + bugzilla_url(bz), cache_fetch(:bugzilla, bz)
         }
         content.scan(bzrx).flatten.uniq.each &process_bugzilla
 
@@ -95,25 +133,7 @@ class SimpleIrcBot
         content.scan(
           %r@(?:#{@gerrit}/(?:#/c/)?|(?:\A|\s)(?:change|review|gerrit):?\s+)(\d+|I?[\da-z]{6,})@i
         ).flatten.uniq.each { |change|
-          changeinfo = cache_provide(:gerrit, change) {
-            changedata = open(
-              "|ssh #{@gerrit_user.shellescape}@#{@gerrit.shellescape} -p #{@gerrit_port} " \
-              "gerrit query --format=json --patch-sets #{change}", &:read)
-            changeinfo = begin
-              # what comes is a JSON stream, ie. concatenated JSON objects,
-              # but JSON can do only a single object, so instead we use YAML
-              changeinfo = YAML.load changedata
-            rescue Psych::SyntaxError
-            end
-            case changeinfo
-            when Hash
-              %w[url subject commitMessage].instance_eval {
-                zip(changeinfo.values_at *self).to_h
-              }
-            else
-              changeinfo
-            end
-          }
+          changeinfo = cache_fetch(:gerrit, change)
           case changeinfo
           when Hash
             say_to_chan *changeinfo.values_at("url", "subject")
@@ -136,14 +156,15 @@ class SimpleIrcBot
 end
 
 OPTS = {
+  bugzilla_url: String,
+  gerrit_user: String,
+  gerrit_port: 29418,
+  gerrit_url: String,
+  cache_prefetch: [],
   server: "irc.freenode.net",
   port: 6667,
   channel: String,
   nick: "batty",
-  bugzilla_url: String,
-  gerrit_user: String,
-  gerrit_port: 29418,
-  gerrit_url: String
 }.map { |o,d| [o, [d]] }.to_h
 fixer = { Fixnum => Integer }
 OptionParser.new { |op|
