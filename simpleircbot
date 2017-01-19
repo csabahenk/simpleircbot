@@ -30,7 +30,7 @@ class SimpleIrcBot
     say "USER ircbot 0 * #{nick}"
     say "JOIN ##{@channel}"
     say_to_chan "#{1.chr}ACTION is here to help#{1.chr}"
-    say_to_chan "Whenever I see {bz|bug} <bug-id>, {gerrit|review|change} <change-number|change-id|git-id> ..."
+    say_to_chan "Whenever I see {#{BUGZILLA_TOKENS.join "|"}} <bug-id>, {#{GERRIT_TOKENS.join "|"}} <change-number|change-id|git-id> ..."
     say_to_chan "... -- or eg. BZ <bug-id> ... I don't care about case -- ..."
     say_to_chan "... or #{@bugzilla}/<bug-id>, #{@gerrit}/<change-number|change-id|git-id> ..."
     say_to_chan "... I tell it like it is!".upcase
@@ -130,6 +130,38 @@ class SimpleIrcBot
     end
   end
 
+  BUGZILLA_TOKENS = %w[bz bug bugzilla]
+  def _BUGZILLA_RX
+    %r@(?:#{Regexp.escape @bugzilla}/(?:show_bug.cgi\?id=)?|(?:\A|\s)(?:#{BUGZILLA_TOKENS.join "|"})[:\s]\s*)(\d+)@i
+  end
+
+  GERRIT_TOKENS = %w[change review gerrit]
+  def _GERRIT_RX
+    %r@(?:#{Regexp.escape @gerrit}/(?:#/c/)?|(?:\A|\s)(?:#{GERRIT_TOKENS.join "|"})[:\s]\s*)(\d+|I?[\da-f]{6,})@i
+  end
+
+  def react_to nick, content
+    # Bugzilla...
+    process_bugzilla = proc { |bz,decor=""|
+      say_to_chan decor + bugzilla_url(bz), cache_fetch(:bugzilla, bz)
+    }
+    content.scan(_BUGZILLA_RX).flatten.uniq.each &process_bugzilla
+
+    # Gerrit...
+    content.scan(_GERRIT_RX).flatten.uniq.each { |change|
+      changeinfo = cache_fetch(:gerrit, change)
+      case changeinfo
+      when Hash
+        say_to_chan *changeinfo.values_at("url", "subject")
+        changeinfo["commitMessage"].each_line {|l|
+          l =~ /\A\s*#{_BUGZILLA_RX}\s*\Z/ && process_bugzilla[$1, "`-> "]
+        }
+      else
+        say_to_chan "#{@gerrit}: change #{change} not found"
+      end
+    }
+  end
+
   def run
     until @socket.eof? do
       msg = @socket.gets
@@ -140,34 +172,9 @@ class SimpleIrcBot
         next
       end
 
-      if msg.match(/PRIVMSG ##{@channel} :(.*)$/)
-        content = $~[1]
-
+      if msg.match(/^:([^!]+)!.*PRIVMSG ##{Regexp.escape @channel} :(.*)$/)
         #put matchers here
-
-        # Bugzilla...
-        bzrx = %r@(?:#{@bugzilla}/(?:show_bug.cgi\?id=)?|(?:\A|\s)(?:bz|bug):?\s+)(\d+)@i
-        process_bugzilla = proc { |bz,decor=""|
-          say_to_chan decor + bugzilla_url(bz), cache_fetch(:bugzilla, bz)
-        }
-        content.scan(bzrx).flatten.uniq.each &process_bugzilla
-
-        # Gerrit...
-        content.scan(
-          %r@(?:#{@gerrit}/(?:#/c/)?|(?:\A|\s)(?:change|review|gerrit):?\s+)(\d+|I?[\da-z]{6,})@i
-        ).flatten.uniq.each { |change|
-          changeinfo = cache_fetch(:gerrit, change)
-          case changeinfo
-          when Hash
-            say_to_chan *changeinfo.values_at("url", "subject")
-            changeinfo["commitMessage"].each_line {|l|
-              l =~ /\A\s*#{bzrx}\s*\Z/ && process_bugzilla[$1, "`-> "]
-            }
-          else
-            say_to_chan "#{@gerrit}: change #{change} not found"
-          end
-        }
-
+        react_to *$~.to_a[1..-1]
       end
     end
   end
