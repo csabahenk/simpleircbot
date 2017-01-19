@@ -11,7 +11,8 @@ class SimpleIrcBot
   def initialize(server:, channel:, nick:, port: 6667,
                  bugzilla_url:, gerrit_url: ,
                  gerrit_user: nil, gerrit_port: 29418,
-                 cache_expiry: 0, cache_prefetch: [])
+                 cache_expiry: 0, cache_prefetch: [],
+                 cache_file: nil)
     @server = server
     @port = port
     @channel = channel
@@ -23,9 +24,17 @@ class SimpleIrcBot
     @cache = {}
     @cache_expiry = cache_expiry <= 0 ? nil : cache_expiry
     @cache_prefetch = cache_prefetch
+    @cache_file = cache_file.to_s.empty? ? nil : cache_file
   end
 
+  attr_reader :cache, :cache_file
+
   def startup
+    @cache_file and begin
+      @cache = YAML.load_file @cache_file
+    rescue Errno::ENOENT
+      puts "warning: cache file does not exist"
+    end
     prefetch_size = @cache_prefetch.size
     @cache_prefetch.each_with_index { |token,i|
       service_tok, id = token.split(":", 2)
@@ -303,6 +312,7 @@ if __FILE__ == $0
     cache_prefetch: [],
     config_file: "",
     pid_file: "",
+    cache_file: "",
     server: "irc.freenode.net",
     port: 6667,
     channel: String,
@@ -345,6 +355,19 @@ if __FILE__ == $0
   pid_file.to_s.empty? || open(pid_file, "w") { |f| f.puts $$ }
   begin
     trap("INT"){ bot.quit }
+    trap("USR1") {
+      bot.cache.each_key { |k| bot.cache_get *k }
+      next if bot.cache_file.to_s.empty?
+      puts begin
+        open("#{bot.cache_file}.tmp", File::WRONLY|File::CREAT|File::EXCL) { |f|
+          f << bot.cache.to_yaml
+        }
+        File.rename "#{bot.cache_file}.tmp", bot.cache_file
+        "saved cache to #{bot.cache_file}."
+      rescue SystemCallError => x
+        "error: failed save cache: #{x}"
+      end
+    }
     bot.startup
     bot.run
   ensure
