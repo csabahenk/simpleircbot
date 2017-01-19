@@ -11,7 +11,7 @@ class SimpleIrcBot
 
   def initialize(server:, port:, channel:, nick:,
                  bugzilla_url:, gerrit_url:, gerrit_user:, gerrit_port:,
-                 cache_prefetch:)
+                 cache_expiry:, cache_prefetch:)
     @channel = channel
     @nick = nick
     @bugzilla = bugzilla_url.sub(%r@\Ahttps?://@, "")
@@ -19,6 +19,7 @@ class SimpleIrcBot
     @gerrit_user = gerrit_user
     @gerrit_port = gerrit_port
     @cache = {}
+    @cache_expiry = cache_expiry <= 0 ? nil : cache_expiry
     cache_prefetch.each { |token|
       service, id = token.split(":", 2)
       service = service.to_sym
@@ -45,13 +46,35 @@ class SimpleIrcBot
   end
 
   def cache_get *keys
-    value = @cache[keys]
-    puts "CACHE: #{value ? "hit" : "miss"} #{keys.inspect}"
+    record = @cache[keys]
+    value = if record
+      if @cache_expiry and Time.now - record[:time] > @cache_expiry * 3600
+        cache_delete *keys
+        nil
+      else
+        record[:value]
+      end
+    end
+    puts "CACHE: " + if value
+      "hit #{keys.inspect}" +
+      if @cache_expiry
+        ", valid for #{(record[:time] - Time.now).to_i/3600 + @cache_expiry} hours"
+      else
+        ""
+      end
+    else
+      "miss #{keys.inspect}"
+    end
     value
   end
 
   def cache_add value, *keys
-    @cache[keys] = value
+    @cache[keys] = {value: value, time: Time.now}
+    value
+  end
+
+  def cache_delete *keys
+    @cache.delete keys
   end
 
   def cache_provide *keys
@@ -160,6 +183,7 @@ OPTS = {
   gerrit_user: String,
   gerrit_port: 29418,
   gerrit_url: String,
+  cache_expiry: 168,
   cache_prefetch: [],
   server: "irc.freenode.net",
   port: 6667,
