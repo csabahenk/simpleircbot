@@ -26,10 +26,20 @@ class SimpleIrcBot
   end
 
   def startup
-    @cache_prefetch.each { |token|
-      service, id = token.split(":", 2)
-      service = service.to_sym
-      cache_fetch service, id
+    prefetch_size = @cache_prefetch.size
+    @cache_prefetch.each_with_index { |token,i|
+      service_tok, id = token.split(":", 2)
+      service = TOKEN_MAP[service_tok]
+      print "pre-fetching #{i+1}/#{prefetch_size}... "
+      val = cache_fetch service, id
+      if service == :gerrit and val
+        j = 1
+        gerrit_get_bugs(val) { |bz|
+          print "pre-fetching #{i+1}:#{j}/#{prefetch_size}..."
+          cache_fetch :bugzilla, bz
+          j += 1
+        }
+      end
     }
     @socket = TCPSocket.open(@server, @port)
     say "NICK #{@nick}"
@@ -152,6 +162,18 @@ class SimpleIrcBot
     %r@(?:#{Regexp.escape @gerrit}/(?:#/c/)?|(?:\A|\s)(?:#{GERRIT_TOKENS.join "|"})[:\s]\s*)(\d+|I?[\da-f]{6,})@i
   end
 
+  TOKEN_MAP = {bugzilla: BUGZILLA_TOKENS, gerrit: GERRIT_TOKENS}.map { |tv,ta|
+    ta.map { |t| [t, tv] }
+  }.inject(&:+).to_h
+
+  def gerrit_get_bugs changeinfo
+    changeinfo["commitMessage"].each_line {|l|
+      if l =~ /\A\s*#{_BUGZILLA_RX}\s*\Z/
+        yield $1
+      end
+    }
+  end
+
   def react_to nick, content
 
     # bot admin/inquiry commands...
@@ -220,13 +242,10 @@ class SimpleIrcBot
       case changeinfo
       when Hash
         say_to_chan *changeinfo.values_at("url", "subject")
-        changeinfo["commitMessage"].each_line {|l|
-          if l =~ /\A\s*#{_BUGZILLA_RX}\s*\Z/
-            bz = $1
-            process_bugzilla[bz, "`-> "]
-            # We don't need to report this bz once more.
-            bugs.delete bz
-          end
+        gerrit_get_bugs(changeinfo) {|bz|
+          process_bugzilla[bz, "`-> "]
+          # We don't need to report this bz once more.
+          bugs.delete bz
         }
       else
         say_to_chan "#{@gerrit}: change #{change} not found"
