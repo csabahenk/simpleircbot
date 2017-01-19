@@ -202,11 +202,11 @@ class SimpleIrcBot
       return
     end
 
-    # Bugzilla...
+    # Bugzilla #1...
     process_bugzilla = proc { |bz,decor=""|
       say_to_chan decor + bugzilla_url(bz), cache_fetch(:bugzilla, bz)
     }
-    content.scan(_BUGZILLA_RX).flatten.uniq.each &process_bugzilla
+    bugs = content.scan(_BUGZILLA_RX).flatten.uniq
 
     # Gerrit...
     content.scan(_GERRIT_RX).flatten.uniq.each { |change|
@@ -215,12 +215,20 @@ class SimpleIrcBot
       when Hash
         say_to_chan *changeinfo.values_at("url", "subject")
         changeinfo["commitMessage"].each_line {|l|
-          l =~ /\A\s*#{_BUGZILLA_RX}\s*\Z/ && process_bugzilla[$1, "`-> "]
+          if l =~ /\A\s*#{_BUGZILLA_RX}\s*\Z/
+            bz = $1
+            process_bugzilla[bz, "`-> "]
+            # We don't need to report this bz once more.
+            bugs.delete bz
+          end
         }
       else
         say_to_chan "#{@gerrit}: change #{change} not found"
       end
     }
+
+    # Bugzilla #2
+    bugs.each &process_bugzilla
   end
 
   def run
