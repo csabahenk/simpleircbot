@@ -301,11 +301,13 @@ if __FILE__ == $0
     gerrit_url: String,
     cache_expiry: 168,
     cache_prefetch: [],
+    config_file: "",
+    pid_file: "",
     server: "irc.freenode.net",
     port: 6667,
     channel: String,
     nick: "batty",
-  }.map { |o,d| [o, [d]] }.to_h
+  }.map { |o,d| [o, {default: d}] }.to_h
   fixer = { Fixnum => Integer }
   OptionParser.new { |op|
      OPTS.each { |o,w|
@@ -319,11 +321,17 @@ if __FILE__ == $0
          (Class === w[0] ? [] : [w[0].class]) << w[0]
        ).instance_eval {|a|
            [fixer[a[0]]||a[0]] + a[1..-1].map(&:to_s)
-       }) { |v| OPTS[o] << v }
+       }) { |v| OPTS[o][:cmdline] = v }
      }
   }.parse!
+  config_file = OPTS.delete(:config_file)[:cmdline]
+  if config_file
+    YAML.load_file(config_file).each { |k,v|
+      (OPTS[k.to_sym]||{})[:conf] = v
+    }
+  end
   OPTS.each { |o,w|
-    v = w[1] || w[0]
+    v = w[:cmdline] || w[:conf] || w[:default]
     if Class === v
       puts "missing value for --#{o}"
       exit 1
@@ -331,11 +339,16 @@ if __FILE__ == $0
     OPTS[o] = v
   }
 
+  pid_file = OPTS.delete :pid_file
   bot = SimpleIrcBot.new(**OPTS)
 
-  trap("INT"){ bot.quit }
-
-  bot.startup
-  bot.run
+  pid_file.to_s.empty? || open(pid_file, "w") { |f| f.puts $$ }
+  begin
+    trap("INT"){ bot.quit }
+    bot.startup
+    bot.run
+  ensure
+    pid_file.to_s.empty? || File.delete(pid_file)
+  end
 
 end
