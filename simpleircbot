@@ -1,7 +1,6 @@
 #!/usr/bin/env ruby
 
 require 'socket'
-require 'optparse'
 require 'open-uri'
 require 'cgi'
 require 'shellwords'
@@ -9,25 +8,32 @@ require 'yaml'
 
 class SimpleIrcBot
 
-  def initialize(server:, port:, channel:, nick:,
-                 bugzilla_url:, gerrit_url:, gerrit_user:, gerrit_port:,
-                 cache_expiry:, cache_prefetch:)
+  def initialize(server:, channel:, nick:, port: 6667,
+                 bugzilla_url:, gerrit_url: ,
+                 gerrit_user: nil, gerrit_port: 29418,
+                 cache_expiry: 0, cache_prefetch: [])
+    @server = server
+    @port = port
     @channel = channel
     @nick = nick
     @bugzilla = bugzilla_url.sub(%r@\Ahttps?://@, "")
-    @gerrit = gerrit_url.sub(%r@\Ahttps?://@, "")
     @gerrit_user = gerrit_user
+    @gerrit = gerrit_url.sub(%r@\Ahttps?://@, "")
     @gerrit_port = gerrit_port
     @cache = {}
     @cache_expiry = cache_expiry <= 0 ? nil : cache_expiry
-    cache_prefetch.each { |token|
+    @cache_prefetch = cache_prefetch
+  end
+
+  def startup
+    @cache_prefetch.each { |token|
       service, id = token.split(":", 2)
       service = service.to_sym
       cache_fetch service, id
     }
-    @socket = TCPSocket.open(server, port)
-    say "NICK #{nick}"
-    say "USER ircbot 0 * #{nick}"
+    @socket = TCPSocket.open(@server, @port)
+    say "NICK #{@nick}"
+    say "USER ircbot 0 * #{@nick}"
     say "JOIN ##{@channel}"
     say_to_chan "#{1.chr}ACTION is here to help#{1.chr}"
     say_to_chan "Whenever I see references to Bugzilla bugs or Gerrit changes, like..."
@@ -39,7 +45,7 @@ class SimpleIrcBot
     say_to_chan "... I tell it like it is!".upcase
     sleep 1
     say_to_chan " "
-    say_to_chan %@Please message "#{nick}: help" to know more.@
+    say_to_chan %@Please message "#{@nick}: help" to know more.@
   end
 
   def say(msg)
@@ -254,45 +260,52 @@ class SimpleIrcBot
   end
 end
 
-OPTS = {
-  bugzilla_url: String,
-  gerrit_user: String,
-  gerrit_port: 29418,
-  gerrit_url: String,
-  cache_expiry: 168,
-  cache_prefetch: [],
-  server: "irc.freenode.net",
-  port: 6667,
-  channel: String,
-  nick: "batty",
-}.map { |o,d| [o, [d]] }.to_h
-fixer = { Fixnum => Integer }
-OptionParser.new { |op|
-   OPTS.each { |o,w|
-     # Mangling OPTS to OptionParser options in a disgraced manner
-     # - opt_name: <scalar> becomes:
-     #   op.on("-o", "--opt-name", fixer[<scalar>.class], <scalar>.to_s) {...}
-     #   where fixer is needed to map arbitrary classes into the class set
-     #   accepted by OptionParser
-     # - opt_name: <class> becomes: op.on("-o", "--opt-name", <class>) {...}
-     op.on("-#{o[0]}", "--#{o.to_s.gsub "_", "-"}=VAL", *(
-       (Class === w[0] ? [] : [w[0].class]) << w[0]
-     ).instance_eval {|a|
-         [fixer[a[0]]||a[0]] + a[1..-1].map(&:to_s)
-     }) { |v| OPTS[o] << v }
-   }
-}.parse!
-OPTS.each { |o,w|
-  v = w[1] || w[0]
-  if Class === v
-    puts "missing value for --#{o}"
-    exit 1
-  end
-  OPTS[o] = v
-}
 
-bot = SimpleIrcBot.new(**OPTS)
+if __FILE__ == $0
+  require 'optparse'
 
-trap("INT"){ bot.quit }
+  OPTS = {
+    bugzilla_url: String,
+    gerrit_user: String,
+    gerrit_port: 29418,
+    gerrit_url: String,
+    cache_expiry: 168,
+    cache_prefetch: [],
+    server: "irc.freenode.net",
+    port: 6667,
+    channel: String,
+    nick: "batty",
+  }.map { |o,d| [o, [d]] }.to_h
+  fixer = { Fixnum => Integer }
+  OptionParser.new { |op|
+     OPTS.each { |o,w|
+       # Mangling OPTS to OptionParser options in a disgraced manner
+       # - opt_name: <scalar> becomes:
+       #   op.on("-o", "--opt-name", fixer[<scalar>.class], <scalar>.to_s) {...}
+       #   where fixer is needed to map arbitrary classes into the class set
+       #   accepted by OptionParser
+       # - opt_name: <class> becomes: op.on("-o", "--opt-name", <class>) {...}
+       op.on("-#{o[0]}", "--#{o.to_s.gsub "_", "-"}=VAL", *(
+         (Class === w[0] ? [] : [w[0].class]) << w[0]
+       ).instance_eval {|a|
+           [fixer[a[0]]||a[0]] + a[1..-1].map(&:to_s)
+       }) { |v| OPTS[o] << v }
+     }
+  }.parse!
+  OPTS.each { |o,w|
+    v = w[1] || w[0]
+    if Class === v
+      puts "missing value for --#{o}"
+      exit 1
+    end
+    OPTS[o] = v
+  }
 
-bot.run
+  bot = SimpleIrcBot.new(**OPTS)
+
+  trap("INT"){ bot.quit }
+
+  bot.startup
+  bot.run
+
+end
