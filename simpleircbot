@@ -202,7 +202,19 @@ class SimpleIrcBot
       when /\A(show-?cache|cache-?show)\Z/
         # Filtering through cache_get enforces a purge of expired items
         ckeys = @cache.keys.select{ |k| cache_get *k }
-        say_to_chan "OK, cached entries: #{ckeys.map { |s,i| "#{s}:#{i}" }.join(" ")}"
+        ckeys.map! { |s,i| "#{s}:#{i}" }
+        # grouping cache key data (heuristically) to not to overflow message
+        arr = [["OK, cached entries:"]]
+        ckeys.each_with_index { |k,i|
+          if i % 18 == 0 and i > 0
+            if i < ckeys.size - 1
+              arr.last << "..."
+            end
+            arr << []
+          end
+          arr.last << k
+        }
+        arr.each { |e| say_to_chan e.join(" ") }
       when "help"
         ["This is #{@nick} bot on the mission to resolve Bugzilla and Gerrit references.",
          " ",
