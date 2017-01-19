@@ -181,23 +181,22 @@ class SimpleIrcBot
       cmd,arg = $1.downcase,$2.strip
       case cmd
       when "forget"
-        if arg == "all"
-          @cache.clear
-          say_to_chan "OK, I forgot everything!"
-        else
-          found = false
-          [[_BUGZILLA_RX, :bugzilla, "BZ"],
-           [_GERRIT_RX, :gerrit, "review"]
-          ].each { |rx, service, token|
-            content.scan(rx).flatten.uniq.each { |id|
-              found = true
-              cache_delete service, id
-              say_to_chan "OK, I forgot about #{token} #{id}!"
-            }
+        @cache.clear
+        say_to_chan "OK, I forgot everything!"
+      when "refetch"
+        items = []
+        [[_BUGZILLA_RX, :bugzilla],
+         [_GERRIT_RX, :gerrit]
+        ].each { |rx, service|
+          arg.scan(rx).flatten.uniq.each { |id|
+            cache_delete service, id
+            items << [service, id]
           }
-          unless found
-            say_to_chan "Hey #{nick}, I don't get what you want me to forget about."
-          end
+        }
+        if items.empty?
+          say_to_chan "Hey #{nick}, nothing to refetch."
+        else
+          react_to nick, items.map { |service,id| "#{service}:#{id}" }.join(" ")
         end
       when /\A(show-?cache|cache-?show)\Z/
         # Filtering through cache_get enforces a purge of expired items
@@ -229,8 +228,8 @@ class SimpleIrcBot
          " ",
          "Besides the following service commands are taken:",
          %@"#{@nick}: show-cache" -- shows cached entries@,
-         %@"#{@nick}: forget <bugzilla or gerrit ref>, ..." -- evicts refs from cache@,
-         %@"#{@nick}: forget all" -- empty the cache@,
+         %@"#{@nick}: refetch <bugzilla or gerrit ref>, ..." -- refetch refs@,
+         %@"#{@nick}: forget" -- empty the cache@,
          %@"#{@nick}: help" -- shows this message.@,
         " ",
         "Drop stars to https://github.com/csabahenk/simpleircbot ;)"].each {|msg|
