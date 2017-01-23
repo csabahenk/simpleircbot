@@ -3,6 +3,8 @@
 load "simpleircbot"
 
 OPTS = {
+  bugzilla_alt: [],
+  gerrit_alt: [],
   bugzilla_url: String,
   gerrit_url: String,
   channel: "<ignored>",
