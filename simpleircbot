@@ -10,35 +10,32 @@ require 'optparse'
 
 class SimpleIrcBot
 
-  def initialize(server:, channel:, nick:, port: 6667,
+  def initialize(channel:, nick:, socket: nil,
                  bugzilla_url:, gerrit_url: ,
                  gerrit_user: nil, gerrit_port: 29418,
-                 cache_expiry: nil, cache_prefetch: [],
-                 cache_file: nil)
-    @server = server
-    @port = port
+                 cache: {}, cache_expiry: nil)
     @channel = channel
     @nick = nick
+    @socket = socket
     @bugzilla = bugzilla_url.sub(%r@\Ahttps?://@, "")
     @gerrit_user = gerrit_user
     @gerrit = gerrit_url.sub(%r@\Ahttps?://@, "")
     @gerrit_port = gerrit_port
-    @cache = {}
+    @cache = cache
     @cache_expiry = (cache_expiry||0) <= 0 ? nil : cache_expiry
-    @cache_prefetch = cache_prefetch
-    @cache_file = cache_file
   end
 
-  attr_reader :cache, :cache_file
+  attr_reader :cache
+  attr_accessor :socket
 
-  def startup
-    @cache_file and begin
-      @cache = YAML.load_file @cache_file
+  def init_cache cache_file: nil, cache_prefetch: []
+    cache_file and begin
+      @cache.merge! YAML.load_file cache_file
     rescue Errno::ENOENT
       puts "warning: cache file does not exist"
     end
-    prefetch_size = @cache_prefetch.size
-    @cache_prefetch.each_with_index { |token,i|
+    prefetch_size = cache_prefetch.size
+    cache_prefetch.each_with_index { |token,i|
       service_tok, id = token.split(":", 2)
       service = TOKEN_MAP[service_tok]
       print "pre-fetching #{i+1}/#{prefetch_size}... "
@@ -52,9 +49,17 @@ class SimpleIrcBot
         }
       end
     }
-    @socket = TCPSocket.open(@server, @port)
-    say "NICK #{@nick}"
-    say "USER ircbot 0 * #{@nick}"
+  end
+
+  def self.connect server:, nick:, port: 6667
+    socket = TCPSocket.open(server, port)
+    say socket, "NICK #{nick}"
+    say socket, "USER ircbot 0 * #{nick}"
+
+    return socket
+  end
+
+  def join
     @channel =~ /^#/ and say "JOIN #{@channel}"
     say_to_chan "#{1.chr}ACTION is here to help#{1.chr}"
     say_to_chan "Whenever I see references to Bugzilla bugs or Gerrit changes, like..."
@@ -70,8 +75,12 @@ class SimpleIrcBot
   end
 
   def say(msg)
+    self.class.say(@socket, msg)
+  end
+
+  def self.say(socket, msg)
     puts msg
-    @socket.puts msg
+    socket.puts msg
   end
 
   def say_to_chan(*msg)
@@ -278,34 +287,37 @@ class SimpleIrcBot
     bugs.each &process_bugzilla
   end
 
-  def run
-    until @socket.eof? do
-      msg = @socket.gets
+  def self.run socket, mynick, bots
+    until socket.eof? do
+      msg = socket.gets
       puts msg
 
       if msg.match(/^PING :(.*)$/)
-        say "PONG #{$~[1]}"
+        say socket, "PONG #{$~[1]}"
         next
       end
 
-      to_rx = [@channel, @nick].map {|n| Regexp.escape n}.join("|")
-      msg =~  /^:([^!]+)!.*PRIVMSG (#{to_rx}) :(.*)$/
-      from,to,content = $1,$2,$3
+      chans,privs = bots.keys.partition {|c| c =~ /^#/ }
+      mkrx = proc{ |a| a.map{ |e| Regexp.escape e }.join("|") }
 
       #put matchers here
-      if
-      # message received on @channel
-      to == @channel or
-      # private message from @channel ("channel" is a misnomer)
-      [from, to] == [@channel, @nick]
-        react_to from, content
+      nick,chan,content = case msg
+      when /^:([^!]+)!.*PRIVMSG (#{mkrx[chans]}) :(.*)$/
+        [$1,$2,$3]
+      when /^:(#{mkrx[privs]})!.*PRIVMSG #{Regexp.escape mynick} :(.*)$/
+        [$1,$1,$2]
       end
+      chan and bots[chan].react_to nick,content
     end
   end
 
-  def quit
+  def part
     @channel =~ /^#/ and say "PART #{@channel} :Daisy, Daisy, give me your answer do"
-    say 'QUIT'
+  end
+
+  def self.quit bots
+    bots.each &:part
+    bots[0] and bots[0].say 'QUIT'
   end
 end
 
@@ -313,7 +325,10 @@ end
 module SimpleOpts
 
   def self.get inopts, config_file_opt: nil, argv: $*
-    opts = inopts.map { |o,d| [o, {default: d}] }.to_h
+    opts = {}
+    [inopts].flatten.each { |oh|
+      opts.merge! oh.map { |o,d| [o, {default: d}] }.to_h
+    }
     fixer = proc { |a| { Fixnum => Integer }[a] || a }
     OptionParser.new { |op|
        opts.each { |o,w|
@@ -358,45 +373,73 @@ module SimpleOpts
 end
 
 if __FILE__ == $0
-  OPTS = {
+  BOT_OPTS = {
     bugzilla_url: String,
     gerrit_user: String,
     gerrit_port: 29418,
     gerrit_url: String,
     cache_expiry: 168,
+  }
+  MAIN_OPTS = {
     cache_prefetch: [],
     config_file: "",
     pid_file: "",
     cache_file: "",
     server: "irc.freenode.net",
     port: 6667,
-    channel: String,
+    channels: Array,
     nick: "batty",
   }
 
-  opts = SimpleOpts.get OPTS, config_file_opt: :config_file
+  opts = SimpleOpts.get [BOT_OPTS, MAIN_OPTS], config_file_opt: :config_file
 
+  channels = opts.delete :channels
+  if channels.empty?
+    puts "no channel specified"
+    exit 1
+  end
+  cache_opts = %i[cache_file cache_prefetch].map { |o|
+    [o, opts.delete(o)]
+  }.to_h
   pid_file = opts.delete :pid_file
-  bot = SimpleIrcBot.new(**opts)
-
   pid_file and open(pid_file, "w") { |f| f.puts $$ }
+
+  connect_opts = %i[server port].map { |o|
+    [o, opts.delete(o)]
+  }.to_h
+  nick = opts[:nick]
+  connect_opts[:nick] = nick
+
+  cache = {}
+  bots = {}
   begin
-    trap("INT"){ bot.quit }
+    trap("INT"){ SimpleIrcBot.quit bots.values }
     trap("USR1") {
-      bot.cache.each_key { |k| bot.cache_get *k }
-      next unless bot.cache_file
+      bot = bots.values[0]
+      bot and cache.each_key { |k| bot.cache_get *k }
+      cache_file = cache_opts[:cache_file]
+      next unless cache_file
       puts begin
-        open("#{bot.cache_file}.tmp", File::WRONLY|File::CREAT|File::EXCL) { |f|
-          f << bot.cache.to_yaml
+        open("#{cache_file}.tmp", File::WRONLY|File::CREAT|File::EXCL) { |f|
+          f << cache.to_yaml
         }
-        File.rename "#{bot.cache_file}.tmp", bot.cache_file
-        "saved cache to #{bot.cache_file}."
+        File.rename "#{cache_file}.tmp", cache_file
+        "saved cache to #{cache_file}."
       rescue SystemCallError => x
         "error: failed save cache: #{x}"
       end
     }
-    bot.startup
-    bot.run
+
+    channels.each { |chan|
+      bots[chan] = SimpleIrcBot.new(channel: chan, cache: cache, **opts)
+    }
+    bots.values[0].init_cache **cache_opts
+    socket = SimpleIrcBot.connect **connect_opts
+    bots.each_value { |b|
+      b.socket = socket
+      b.join
+    }
+    SimpleIrcBot.run socket, nick, bots
   ensure
     pid_file and File.delete(pid_file)
   end

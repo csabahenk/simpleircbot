@@ -5,8 +5,6 @@ load "simpleircbot"
 OPTS = {
   bugzilla_url: String,
   gerrit_url: String,
-  cache_prefetch: [],
-  server: "<ignored>",
   channel: "<ignored>",
   nick: "<ignored>",
 }
