@@ -55,7 +55,7 @@ class SimpleIrcBot
     @socket = TCPSocket.open(@server, @port)
     say "NICK #{@nick}"
     say "USER ircbot 0 * #{@nick}"
-    say "JOIN ##{@channel}"
+    @channel =~ /^#/ and say "JOIN #{@channel}"
     say_to_chan "#{1.chr}ACTION is here to help#{1.chr}"
     say_to_chan "Whenever I see references to Bugzilla bugs or Gerrit changes, like..."
     say_to_chan "... BZ 36734, gerrit:531232 ..."
@@ -75,7 +75,7 @@ class SimpleIrcBot
   end
 
   def say_to_chan(*msg)
-    say "PRIVMSG ##{@channel} :#{msg.join ", "}"
+    say "PRIVMSG #{@channel} :#{msg.join ", "}"
   end
 
   def cache_get *keys, verbose: false
@@ -288,15 +288,23 @@ class SimpleIrcBot
         next
       end
 
-      if msg.match(/^:([^!]+)!.*PRIVMSG ##{Regexp.escape @channel} :(.*)$/)
-        #put matchers here
-        react_to *$~.to_a[1..-1]
+      to_rx = [@channel, @nick].map {|n| Regexp.escape n}.join("|")
+      msg =~  /^:([^!]+)!.*PRIVMSG (#{to_rx}) :(.*)$/
+      from,to,content = $1,$2,$3
+
+      #put matchers here
+      if
+      # message received on @channel
+      to == @channel or
+      # private message from @channel ("channel" is a misnomer)
+      [from, to] == [@channel, @nick]
+        react_to from, content
       end
     end
   end
 
   def quit
-    say "PART ##{@channel} :Daisy, Daisy, give me your answer do"
+    @channel =~ /^#/ and say "PART #{@channel} :Daisy, Daisy, give me your answer do"
     say 'QUIT'
   end
 end
