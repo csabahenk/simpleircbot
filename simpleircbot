@@ -5,13 +5,15 @@ require 'open-uri'
 require 'cgi'
 require 'shellwords'
 require 'yaml'
+require 'optparse'
+
 
 class SimpleIrcBot
 
   def initialize(server:, channel:, nick:, port: 6667,
                  bugzilla_url:, gerrit_url: ,
                  gerrit_user: nil, gerrit_port: 29418,
-                 cache_expiry: 0, cache_prefetch: [],
+                 cache_expiry: nil, cache_prefetch: [],
                  cache_file: nil)
     @server = server
     @port = port
@@ -22,9 +24,9 @@ class SimpleIrcBot
     @gerrit = gerrit_url.sub(%r@\Ahttps?://@, "")
     @gerrit_port = gerrit_port
     @cache = {}
-    @cache_expiry = cache_expiry <= 0 ? nil : cache_expiry
+    @cache_expiry = (cache_expiry||0) <= 0 ? nil : cache_expiry
     @cache_prefetch = cache_prefetch
-    @cache_file = cache_file.to_s.empty? ? nil : cache_file
+    @cache_file = cache_file
   end
 
   attr_reader :cache, :cache_file
@@ -300,9 +302,54 @@ class SimpleIrcBot
 end
 
 
-if __FILE__ == $0
-  require 'optparse'
+module SimpleOpts
 
+  def self.get inopts, config_file_opt: nil, argv: $*
+    opts = inopts.map { |o,d| [o, {default: d}] }.to_h
+    fixer = proc { |a| { Fixnum => Integer }[a] || a }
+    OptionParser.new { |op|
+       opts.each { |o,w|
+         # Mangling opts to OptionParser options in a disgraced manner
+         # - opt_name: <scalar> becomes:
+         #   op.on("-o", "--opt-name", fixer[<scalar>.class], <scalar>.to_s) {...}
+         #   where fixer is needed to map arbitrary classes into the class set
+         #   accepted by OptionParser
+         # - opt_name: <class> becomes: op.on("-o", "--opt-name", <class>) {...}
+         defval = w[:default]
+         optargs = [
+          "-#{o[0]}",
+          "--#{o.to_s.gsub "_", "-"}=VAL",
+          ((Class === defval ? [] : [defval.class]) << defval).instance_eval {|a|
+             [fixer[a[0]], a[1..-1].map(&:to_s)].flatten
+          }
+         ].flatten
+         op.on(*optargs) { |v| opts[o][:cmdline] = v }
+       }
+    }.parse! argv
+    if config_file_opt
+      config_file = (opts.delete(config_file_opt)||{})[:cmdline]
+      if config_file
+        YAML.load_file(config_file).each { |k,v|
+          (opts[k.to_sym]||{})[:conf] = v
+        }
+      end
+    end
+    opts.each { |o,w|
+      v = w[:cmdline] || w[:conf] || w[:default]
+      if Class === v
+        puts "missing value for --#{o}"
+        exit 1
+      end
+      v == "" and v = nil
+      opts[o] = v
+    }
+
+    opts
+  end
+
+end
+
+if __FILE__ == $0
   OPTS = {
     bugzilla_url: String,
     gerrit_user: String,
@@ -317,47 +364,19 @@ if __FILE__ == $0
     port: 6667,
     channel: String,
     nick: "batty",
-  }.map { |o,d| [o, {default: d}] }.to_h
-  fixer = { Fixnum => Integer }
-  OptionParser.new { |op|
-     OPTS.each { |o,w|
-       # Mangling OPTS to OptionParser options in a disgraced manner
-       # - opt_name: <scalar> becomes:
-       #   op.on("-o", "--opt-name", fixer[<scalar>.class], <scalar>.to_s) {...}
-       #   where fixer is needed to map arbitrary classes into the class set
-       #   accepted by OptionParser
-       # - opt_name: <class> becomes: op.on("-o", "--opt-name", <class>) {...}
-       op.on("-#{o[0]}", "--#{o.to_s.gsub "_", "-"}=VAL", *(
-         (Class === w[0] ? [] : [w[0].class]) << w[0]
-       ).instance_eval {|a|
-           [fixer[a[0]]||a[0]] + a[1..-1].map(&:to_s)
-       }) { |v| OPTS[o][:cmdline] = v }
-     }
-  }.parse!
-  config_file = OPTS.delete(:config_file)[:cmdline]
-  if config_file
-    YAML.load_file(config_file).each { |k,v|
-      (OPTS[k.to_sym]||{})[:conf] = v
-    }
-  end
-  OPTS.each { |o,w|
-    v = w[:cmdline] || w[:conf] || w[:default]
-    if Class === v
-      puts "missing value for --#{o}"
-      exit 1
-    end
-    OPTS[o] = v
   }
 
-  pid_file = OPTS.delete :pid_file
-  bot = SimpleIrcBot.new(**OPTS)
+  opts = SimpleOpts.get OPTS, config_file_opt: :config_file
 
-  pid_file.to_s.empty? || open(pid_file, "w") { |f| f.puts $$ }
+  pid_file = opts.delete :pid_file
+  bot = SimpleIrcBot.new(**opts)
+
+  pid_file and open(pid_file, "w") { |f| f.puts $$ }
   begin
     trap("INT"){ bot.quit }
     trap("USR1") {
       bot.cache.each_key { |k| bot.cache_get *k }
-      next if bot.cache_file.to_s.empty?
+      next unless bot.cache_file
       puts begin
         open("#{bot.cache_file}.tmp", File::WRONLY|File::CREAT|File::EXCL) { |f|
           f << bot.cache.to_yaml
@@ -371,7 +390,7 @@ if __FILE__ == $0
     bot.startup
     bot.run
   ensure
-    pid_file.to_s.empty? || File.delete(pid_file)
+    pid_file and File.delete(pid_file)
   end
 
 end
