@@ -7,11 +7,10 @@ OPTS = {
   gerrit_alt: [],
   bugzilla_url: String,
   gerrit_url: String,
-  channel: "<ignored>",
   nick: "<ignored>",
 }
 
-bot = SimpleIrcBot.new(**SimpleOpts.get(OPTS))
+bot = SimpleIrcBot::Base.new(**SimpleOpts.get(OPTS))
 
 log = $<.read
 data = {"bz"=>:_BUGZILLA_RX, "gerrit"=>:_GERRIT_RX}.map { |t,rx|
