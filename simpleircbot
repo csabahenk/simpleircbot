@@ -404,7 +404,7 @@ module SimpleOpts
       end
     end
     opts.each { |o,w|
-      v = w[:cmdline] || w[:conf] || w[:default]
+      v = w.values_at(:cmdline, :conf, :default).compact.first
       if Class === v
         puts "missing value for --#{o}"
         exit 1
