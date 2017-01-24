@@ -3,7 +3,6 @@
 require 'socket'
 require 'open-uri'
 require 'cgi'
-require 'shellwords'
 require 'yaml'
 require 'optparse'
 
@@ -98,9 +97,9 @@ module SimpleIrcBot
     end
 
     def fetch_gerrit change
-      changedata = open(
-        "|ssh #{@gerrit_user.shellescape}@#{@gerrit.shellescape} -p #{@gerrit_port} " \
-        "gerrit query --format=json --patch-sets #{change}", &:read)
+      changedata = IO.popen(
+        ["ssh", "#{@gerrit_user}@#{@gerrit}", "-p", "#{@gerrit_port}",
+         %w[gerrit query --format=json --patch-sets], change].flatten, &:read)
       changeinfo = begin
         # what comes is a JSON stream, ie. concatenated JSON objects,
         # but JSON can do only a single object, so instead we use YAML
