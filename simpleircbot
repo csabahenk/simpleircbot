@@ -14,7 +14,7 @@ module SimpleIrcBot
     def initialize(nick:, bugzilla_url:, gerrit_url: ,
                    bugzilla_alt: [], gerrit_alt: [],
                    gerrit_user: nil, gerrit_port: 29418,
-                   cache: {}, cache_expiry: nil)
+                   cache: {}, cache_expiry: nil, hush: nil)
       @nick = nick
       @bugzilla = bugzilla_url.sub(%r@\Ahttps?://@, "")
       @bugzilla_alt = bugzilla_alt
@@ -24,6 +24,7 @@ module SimpleIrcBot
       @gerrit_port = gerrit_port
       @cache = cache
       @cache_expiry = (cache_expiry||0) <= 0 ? nil : cache_expiry
+      @hush = (hush||0) <= 0 ? nil : hush
     end
 
     def say(msg)
@@ -227,6 +228,7 @@ module SimpleIrcBot
     def initialize(channel:, socket:, **opts)
       @channel = channel
       @socket = socket
+      @accesslog = {}
       super **opts
     end
 
@@ -257,6 +259,7 @@ module SimpleIrcBot
         case cmd
         when "forget"
           @cache.clear
+          @accesslog.clear
           say_to_chan "OK, I forgot everything!"
         when "refetch"
           items = []
@@ -265,6 +268,7 @@ module SimpleIrcBot
           ].each { |rx, service|
             arg.scan(rx).flatten.uniq.each { |id|
               cache_delete service, id
+              @accesslog.delete [service, id]
               items << [service, id]
             }
           }
@@ -316,15 +320,28 @@ module SimpleIrcBot
         return
       end
 
+      hushed = proc { |service,id|
+        @hush and (@accesslog[[service, id]]||Time.at(0)) + @hush > Time.now
+      }
+
       # Bugzilla #1...
       process_bugzilla = proc { |bz,decor=""|
-        say_to_chan decor + bugzilla_url(bz), cache_fetch(:bugzilla, bz)
+        buginfo = cache_fetch(:bugzilla, bz)
+        unless hushed[:bugzilla, bz]
+          @accesslog[[:bugzilla, bz]] = Time.now
+          say_to_chan decor + bugzilla_url(bz), buginfo
+        end
       }
       bugs = content.scan(_BUGZILLA_RX).flatten.uniq
 
       # Gerrit...
       content.scan(_GERRIT_RX).flatten.uniq.each { |change|
         changeinfo = cache_fetch(:gerrit, change)
+        if hushed[:gerrit, change]
+          next
+        else
+          @accesslog[[:gerrit, change]] = Time.now
+        end
         case changeinfo
         when Hash
           say_to_chan *changeinfo.values_at("url", "subject")
@@ -412,6 +429,7 @@ if __FILE__ == $0
     cache_expiry: 168,
     server: "irc.freenode.net",
     nick: "batty",
+    hush: 0,
   }
   MAIN_OPTS = {
     cache_prefetch: [],
