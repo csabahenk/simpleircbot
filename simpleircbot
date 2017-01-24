@@ -14,7 +14,8 @@ module SimpleIrcBot
     def initialize(nick:, bugzilla_url:, gerrit_url: ,
                    bugzilla_alt: [], gerrit_alt: [],
                    gerrit_user: nil, gerrit_port: 29418,
-                   cache: {}, cache_expiry: nil, hush: nil)
+                   cache: {}, cache_expiry: nil, hush: nil,
+                   greeting: true)
       @nick = nick
       @bugzilla = bugzilla_url.sub(%r@\Ahttps?://@, "")
       @bugzilla_alt = bugzilla_alt
@@ -25,6 +26,7 @@ module SimpleIrcBot
       @cache = cache
       @cache_expiry = (cache_expiry||0) <= 0 ? nil : cache_expiry
       @hush = (hush||0) <= 0 ? nil : hush
+      @greeting = greeting
     end
 
     def say(msg)
@@ -235,6 +237,7 @@ module SimpleIrcBot
     def join
       @channel =~ /^#/ and say "JOIN #{@channel}"
       say_to_chan "#{1.chr}ACTION is here to help#{1.chr}"
+      return unless @greeting
       say_to_chan "Whenever I see references to Bugzilla bugs or Gerrit changes, like..."
       say_to_chan "... BZ 36734, gerrit:531232 ..."
       say_to_chan "... or URLs like..."
@@ -420,6 +423,7 @@ end
 
 if __FILE__ == $0
   BOT_OPTS = {
+    greeting: true,
     bugzilla_alt: [],
     bugzilla_url: String,
     gerrit_user: String,
