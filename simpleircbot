@@ -437,6 +437,7 @@ if __FILE__ == $0
   }
   MAIN_OPTS = {
     cache_prefetch: [],
+    cache_prefetch_gen: "",
     config_file: "",
     pid_file: "",
     cache_file: "",
@@ -460,6 +461,9 @@ if __FILE__ == $0
   cache_init_opts = %i[cache_file cache_prefetch].map { |o|
     [o, opts.delete(o)]
   }.to_h
+  gen = opts.delete :cache_prefetch_gen
+  gen and cache_init_opts[:cache_prefetch].concat(
+    IO.popen(gen, &:read).strip.split(/\s*,\s*/))
   pid_file = opts.delete :pid_file
   pid_file and open(pid_file, "w") { |f| f.puts $$ }
 
