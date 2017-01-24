@@ -7,10 +7,18 @@ OPTS = {
   gerrit_alt: [],
   bugzilla_url: String,
   gerrit_url: String,
-  nick: "<ignored>",
 }
 
-bot = SimpleIrcBot::Base.new(**SimpleOpts.get(OPTS))
+class OptionSink
+  def initialize _stub: nil
+  end
+end
+
+class StubBot < OptionSink
+  include BugzillaGerritBot
+end
+
+bot = StubBot.new(**SimpleOpts.get(OPTS))
 
 log = $<.read
 data = {"bz"=>:_BUGZILLA_RX, "gerrit"=>:_GERRIT_RX}.map { |t,rx|

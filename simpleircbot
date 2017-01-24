@@ -7,156 +7,283 @@ require 'yaml'
 require 'optparse'
 
 
+######################################################################################
+
+
 module SimpleIrcBot
 
-  class Base
+  def self.regexp_join *a
+    a.flatten.map{ |e| Regexp.escape e }.join("|")
+  end
 
-    def initialize(nick:, bugzilla_url:, gerrit_url: ,
-                   bugzilla_alt: [], gerrit_alt: [],
-                   gerrit_user: nil, gerrit_port: 29418,
-                   cache: {}, cache_expiry: nil, hush: nil,
-                   greeting: true)
-      @nick = nick
-      @bugzilla = bugzilla_url.sub(%r@\Ahttps?://@, "")
-      @bugzilla_alt = bugzilla_alt
-      @gerrit_user = gerrit_user
-      @gerrit = gerrit_url.sub(%r@\Ahttps?://@, "")
-      @gerrit_alt = gerrit_alt
-      @gerrit_port = gerrit_port
-      @cache = cache
-      @cache_expiry = (cache_expiry||0) <= 0 ? nil : cache_expiry
-      @hush = (hush||0) <= 0 ? nil : hush
-      @greeting = greeting
-    end
+  def _get_common_irc_opts nick:, **opts
+    @nick = nick
+    opts
+  end
+  private :_get_common_irc_opts
 
-    def say(msg)
-      puts msg
-      @socket.puts msg
-    end
+  def say(msg)
+    puts msg
+    @socket.puts msg
+  end
 
-    def cache_get *keys, verbose: false
-      record = @cache[keys]
-      value = if record
-        if @cache_expiry and Time.now - record[:time] > @cache_expiry * 3600
-          cache_delete *keys
-          nil
-        else
-          record[:value]
-        end
-      end
-      verbose and puts "CACHE: " + if value
-        "hit #{keys.inspect}" +
-        if @cache_expiry
-          ", valid for #{(record[:time] - Time.now).to_i/3600 + @cache_expiry} hours"
-        else
-          ""
-        end
+  class ChanMember
+  end
+
+  class Bot
+    include SimpleIrcBot
+
+    MemberClass = ChanMember
+
+    def initialize(server:, port: 6667,
+                   memberclass: self.class.const_get(:MemberClass), **opts)
+      @server = server
+      @port = port
+      @bots = {}
+      @memberclass = memberclass
+      if @opts
+        # upper layer captured opts already,
+        # we have to take care to clear our
+        # private ones also from that
+        %i[server port].each { |o| @opts.delete o }
       else
-        "miss #{keys.inspect}"
+        @opts = opts
       end
-      value
+      _get_common_irc_opts **opts
     end
 
-    def cache_add value, *keys
-      @cache[keys] = {value: value, time: Time.now}
-      value
+    def connect
+      @socket = TCPSocket.open(@server, @port)
+      say "NICK #{@nick}"
+      say "USER ircbot 0 * #{@nick}"
     end
 
-    def cache_delete *keys
-      @cache.delete keys
-    end
+    def run
+      until @socket.eof? do
+        msg = @socket.gets
+        puts msg
 
-    def cache_provide *keys
-      value = cache_get *keys, verbose: true
-      value and return value
-      value = yield *keys
-      cache_add value, *keys
-    end
-
-    def cache_fetch service, id
-      cache_provide service, id, &method(:fetch)
-    end
-
-    def fetch service, id
-      send "fetch_#{service}", id
-    end
-
-    def bugzilla_url bz
-      "https://#{@bugzilla}/#{bz}"
-    end
-
-    def fetch_bugzilla bz
-      title = "Bug not found :("
-      open(bugzilla_url bz) {|f|
-        while l=f.gets
-          if l =~ %r@<title>(.*)</title>@
-            # CGI.unescapeHTML does not know of ndash :/
-            title = CGI.unescapeHTML $1.gsub("&ndash;", "–")
-            break
-          end
+        if msg.match(/^PING :(.*)$/)
+          say "PONG #{$~[1]}"
+          next
         end
-      }
-      title
-    end
 
-    def fetch_gerrit change
-      changedata = IO.popen(
-        ["ssh", "#{@gerrit_user}@#{@gerrit}", "-p", "#{@gerrit_port}",
-         %w[gerrit query --format=json --patch-sets], change].flatten, &:read)
-      changeinfo = begin
-        # what comes is a JSON stream, ie. concatenated JSON objects,
-        # but JSON can do only a single object, so instead we use YAML
-        changeinfo = YAML.load changedata
-      rescue Psych::SyntaxError
-      end
-      case changeinfo
-      when Hash
-        changeinfo = %w[url subject commitMessage].instance_eval {
-          zip(changeinfo.values_at *self).to_h
-        }
-        changeinfo.values.include? nil and changeinfo = nil
-      end
-      changeinfo
-    end
+        chans,privs = @bots.keys.partition {|c| c =~ /^#/ }
 
-    BUGZILLA_TOKENS = %w[bz bug bugzilla]
-    def _BUGZILLA_RX
-      %r@(?:(?:#{self.class.regexp_join @bugzilla, @bugzilla_alt})/(?:show_bug.cgi\?id=)?|(?:\A|\s)(?:#{BUGZILLA_TOKENS.join "|"})[:\s]\s*)(\d+)@i
-    end
-
-    GERRIT_TOKENS = %w[change review gerrit]
-    def _GERRIT_RX
-      %r@(?:(?:#{self.class.regexp_join @gerrit, @gerrit_alt})/(?:#/c/)?|(?:\A|\s)(?:#{GERRIT_TOKENS.join "|"})[:\s]\s*)(\d+|I?[\da-f]{6,})@i
-    end
-
-    TOKEN_MAP = {bugzilla: BUGZILLA_TOKENS, gerrit: GERRIT_TOKENS}.map { |tv,ta|
-      ta.map { |t| [t, tv] }
-    }.inject(&:+).to_h
-
-    def gerrit_get_bugs changeinfo
-      changeinfo["commitMessage"].each_line {|l|
-        if l =~ /\A\s*#{_BUGZILLA_RX}\s*\Z/
-          yield $1
+        #put matchers here
+        nick,chan,content = case msg
+        when /^:([^!]+)!.*PRIVMSG (#{SimpleIrcBot.regexp_join chans}) :(.*)$/
+          [$1,$2,$3]
+        when /^:(#{SimpleIrcBot.regexp_join privs})!.*PRIVMSG #{Regexp.escape @nick} :(.*)$/
+          [$1,$1,$2]
         end
+        chan and @bots[chan].react_to nick,content
+      end
+    end
+
+    def join *channels
+      channels.each { |chan|
+        @bots[chan] = @memberclass.new(socket: @socket, channel: chan, **@opts)
+        @bots[chan].join
       }
     end
 
-    def self.regexp_join *a
-      a.flatten.map{ |e| Regexp.escape e }.join("|")
+    def quit
+      @bots.each_value &:part
+      say 'QUIT'
     end
 
   end
 
 
-  class Bot < Base
+  class ChanMember
+    include SimpleIrcBot
 
-    def initialize(server:, port: 6667, **opts)
-      @server = server
-      @port = port
-      @bots = {}
-      @opts = opts
-      super **opts
+    def initialize(channel:, socket:, greeting: true, **opts)
+      @channel = channel
+      @socket = socket
+      @greeting = greeting
+      _initialize_chanmember _get_common_irc_opts(**opts)
     end
+
+    # _stub: to make it into keyworded method
+    def _initialize_chanmember _stub: nil
+    end
+    private :_initialize_chanmember
+
+    def greet0
+      say_to_chan "#{1.chr}ACTION is here to help#{1.chr}"
+    end
+
+    def greet
+    end
+
+    def join
+      @channel =~ /^#/ and say "JOIN #{@channel}"
+      greet0
+      return unless @greeting
+      greet
+    end
+
+    def say_to_chan(*msg)
+      say "PRIVMSG #{@channel} :#{msg.join ", "}"
+    end
+
+    def react_to nick, content
+    end
+
+    def part
+      @channel =~ /^#/ and say "PART #{@channel} :Daisy, Daisy, give me your answer do"
+    end
+
+  end
+
+end
+
+
+######################################################################################
+
+
+module BugzillaGerritBot
+
+  def initialize **opts
+    (@opts||={}).merge! opts
+    super **_initialize_bugzillageritbot(**opts)
+  end
+
+  def _initialize_bugzillageritbot(
+        bugzilla_url:, gerrit_url: ,
+        bugzilla_alt: [], gerrit_alt: [],
+        gerrit_user: nil, gerrit_port: 29418,
+        cache: {}, cache_expiry: nil, hush: nil,
+        **opts)
+    @bugzilla = bugzilla_url.sub(%r@\Ahttps?://@, "")
+    @bugzilla_alt = bugzilla_alt
+    @gerrit_user = gerrit_user
+    @gerrit = gerrit_url.sub(%r@\Ahttps?://@, "")
+    @gerrit_alt = gerrit_alt
+    @gerrit_port = gerrit_port
+    @cache = cache
+    @cache_expiry = (cache_expiry||0) <= 0 ? nil : cache_expiry
+    @hush = (hush||0) <= 0 ? nil : hush
+    opts
+  end
+
+  def cache_get *keys, verbose: false
+    record = @cache[keys]
+    value = if record
+      if @cache_expiry and Time.now - record[:time] > @cache_expiry * 3600
+        cache_delete *keys
+        nil
+      else
+        record[:value]
+      end
+    end
+    verbose and puts "CACHE: " + if value
+      "hit #{keys.inspect}" +
+      if @cache_expiry
+        ", valid for #{(record[:time] - Time.now).to_i/3600 + @cache_expiry} hours"
+      else
+        ""
+      end
+    else
+      "miss #{keys.inspect}"
+    end
+    value
+  end
+
+  def cache_add value, *keys
+    @cache[keys] = {value: value, time: Time.now}
+    value
+  end
+
+  def cache_delete *keys
+    @cache.delete keys
+  end
+
+  def cache_provide *keys
+    value = cache_get *keys, verbose: true
+    value and return value
+    value = yield *keys
+    cache_add value, *keys
+  end
+
+  def cache_fetch service, id
+    cache_provide service, id, &method(:fetch)
+  end
+
+  def fetch service, id
+    send "fetch_#{service}", id
+  end
+
+  def bugzilla_url bz
+    "https://#{@bugzilla}/#{bz}"
+  end
+
+  def fetch_bugzilla bz
+    title = "Bug not found :("
+    open(bugzilla_url bz) {|f|
+      while l=f.gets
+        if l =~ %r@<title>(.*)</title>@
+          # CGI.unescapeHTML does not know of ndash :/
+          title = CGI.unescapeHTML $1.gsub("&ndash;", "–")
+          break
+        end
+      end
+    }
+    title
+  end
+
+  def fetch_gerrit change
+    changedata = IO.popen(
+      ["ssh", "#{@gerrit_user}@#{@gerrit}", "-p", "#{@gerrit_port}",
+       %w[gerrit query --format=json --patch-sets], change].flatten, &:read)
+    changeinfo = begin
+      # what comes is a JSON stream, ie. concatenated JSON objects,
+      # but JSON can do only a single object, so instead we use YAML
+      changeinfo = YAML.load changedata
+    rescue Psych::SyntaxError
+    end
+    case changeinfo
+    when Hash
+      changeinfo = %w[url subject commitMessage].instance_eval {
+        zip(changeinfo.values_at *self).to_h
+      }
+      changeinfo.values.include? nil and changeinfo = nil
+    end
+    changeinfo
+  end
+
+  BUGZILLA_TOKENS = %w[bz bug bugzilla]
+  def _BUGZILLA_RX
+    %r@(?:(?:#{SimpleIrcBot.regexp_join @bugzilla, @bugzilla_alt})/(?:show_bug.cgi\?id=)?|(?:\A|\s)(?:#{BUGZILLA_TOKENS.join "|"})[:\s]\s*)(\d+)@i
+  end
+
+  GERRIT_TOKENS = %w[change review gerrit]
+  def _GERRIT_RX
+    %r@(?:(?:#{SimpleIrcBot.regexp_join @gerrit, @gerrit_alt})/(?:#/c/)?|(?:\A|\s)(?:#{GERRIT_TOKENS.join "|"})[:\s]\s*)(\d+|I?[\da-f]{6,})@i
+  end
+
+  TOKEN_MAP = {bugzilla: BUGZILLA_TOKENS, gerrit: GERRIT_TOKENS}.map { |tv,ta|
+    ta.map { |t| [t, tv] }
+  }.inject(&:+).to_h
+
+  def gerrit_get_bugs changeinfo
+    changeinfo["commitMessage"].each_line {|l|
+      if l =~ /\A\s*#{_BUGZILLA_RX}\s*\Z/
+        yield $1
+      end
+    }
+  end
+
+
+  class ChanMember < SimpleIrcBot::ChanMember
+  end
+
+  class Bot < SimpleIrcBot::Bot
+    include BugzillaGerritBot
+
+    MemberClass = ChanMember
 
     def init_cache cache_file: nil, cache_prefetch: []
       cache_file and begin
@@ -181,63 +308,18 @@ module SimpleIrcBot
       }
     end
 
-    def connect
-      @socket = TCPSocket.open(@server, @port)
-      say "NICK #{@nick}"
-      say "USER ircbot 0 * #{@nick}"
-    end
-
-    def run
-      until @socket.eof? do
-        msg = @socket.gets
-        puts msg
-
-        if msg.match(/^PING :(.*)$/)
-          say "PONG #{$~[1]}"
-          next
-        end
-
-        chans,privs = @bots.keys.partition {|c| c =~ /^#/ }
-
-        #put matchers here
-        nick,chan,content = case msg
-        when /^:([^!]+)!.*PRIVMSG (#{self.class.regexp_join chans}) :(.*)$/
-          [$1,$2,$3]
-        when /^:(#{self.class.regexp_join privs})!.*PRIVMSG #{Regexp.escape @nick} :(.*)$/
-          [$1,$1,$2]
-        end
-        chan and @bots[chan].react_to nick,content
-      end
-    end
-
-    def join *channels
-      channels.each { |chan|
-        @bots[chan] = ChanMember.new(socket: @socket, channel: chan, **@opts)
-        @bots[chan].join
-      }
-    end
-
-    def quit
-      @bots.each_value &:part
-      say 'QUIT'
-    end
-
   end
 
 
-  class ChanMember < Base
+  class ChanMember < SimpleIrcBot::ChanMember
+    include BugzillaGerritBot
 
-    def initialize(channel:, socket:, **opts)
-      @channel = channel
-      @socket = socket
+    def initialize **opts
       @accesslog = {}
-      super **opts
+      super
     end
 
-    def join
-      @channel =~ /^#/ and say "JOIN #{@channel}"
-      say_to_chan "#{1.chr}ACTION is here to help#{1.chr}"
-      return unless @greeting
+    def greet
       say_to_chan "Whenever I see references to Bugzilla bugs or Gerrit changes, like..."
       say_to_chan "... BZ 36734, gerrit:531232 ..."
       say_to_chan "... or URLs like..."
@@ -248,10 +330,6 @@ module SimpleIrcBot
       sleep 1
       say_to_chan " "
       say_to_chan %@Please message "#{@nick}: help" to know more.@
-    end
-
-    def say_to_chan(*msg)
-      say "PRIVMSG #{@channel} :#{msg.join ", "}"
     end
 
     def react_to nick, content
@@ -362,13 +440,12 @@ module SimpleIrcBot
       bugs.each &process_bugzilla
     end
 
-    def part
-      @channel =~ /^#/ and say "PART #{@channel} :Daisy, Daisy, give me your answer do"
-    end
-
   end
 
 end
+
+
+######################################################################################
 
 
 module SimpleOpts
@@ -421,6 +498,10 @@ module SimpleOpts
 
 end
 
+
+######################################################################################
+
+
 if __FILE__ == $0
   BOT_OPTS = {
     greeting: true,
@@ -468,7 +549,7 @@ if __FILE__ == $0
   pid_file and open(pid_file, "w") { |f| f.puts $$ }
 
   opts[:cache] = {}
-  bot = SimpleIrcBot::Bot.new(**opts)
+  bot = BugzillaGerritBot::Bot.new(**opts)
 
   begin
     trap("INT"){ bot.quit }
