@@ -4,6 +4,10 @@ Bugzilla and Gerrit ids.
 Just specify the room, the Bugzilla and Gerrit paramenters
 and launch it.
 
+For writing your own bots:
+- simpleircbot.rb is the "framework"
+- see hellobot.rb for an example bot.
+
 Credit goes to:
  http://kevin.glowacz.info/2009/03/simple-irc-bot-in-ruby.html
  https://github.com/kjg/simpleircbot
