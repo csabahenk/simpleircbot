@@ -1,6 +1,7 @@
 #!/usr/bin/env ruby
 
-load "simpleircbot"
+require 'simpleopts'
+require 'batty'
 
 OPTS = {
   bugzilla_alt: [],
