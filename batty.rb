@@ -204,6 +204,17 @@ module BugzillaGerritBot
       # bot admin/inquiry commands...
       if content =~ /\A\s*#{Regexp.escape @nick}[:,\s]\s*(\S+)\s*(.*)/i
         cmd,arg = $1.downcase,$2.strip
+
+        scanitems = proc { |&blk|
+          [[_BUGZILLA_RX, :bugzilla],
+           [_GERRIT_RX, :gerrit]
+          ].each { |rx, service|
+            arg.scan(rx).flatten.uniq.each { |id|
+              blk[[service, id]]
+            }
+          }
+        }
+
         case cmd
         when "forget"
           @cache.clear
@@ -211,14 +222,10 @@ module BugzillaGerritBot
           say_to_chan "OK, I forgot everything!"
         when "refetch"
           items = []
-          [[_BUGZILLA_RX, :bugzilla],
-           [_GERRIT_RX, :gerrit]
-          ].each { |rx, service|
-            arg.scan(rx).flatten.uniq.each { |id|
-              cache_delete service, id
-              @accesslog.delete [service, id]
-              items << [service, id]
-            }
+          scanitems.call { |ref|
+            cache_delete *ref
+            @accesslog.delete ref
+            items << ref
           }
           if items.empty?
             say_to_chan "Hey #{nick}, nothing to refetch."
@@ -226,21 +233,37 @@ module BugzillaGerritBot
             react_to nick, items.map { |service,id| "#{service}:#{id}" }.join(" ")
           end
         when /\A(show-?cache|cache-?show)\Z/
-          # Filtering through cache_get enforces a purge of expired items
-          ckeys = @cache.keys.select{ |k| cache_get *k }
-          ckeys.map! { |s,i| "#{s}:#{i}" }
-          # grouping cache key data (heuristically) to not to overflow message
-          arr = [["OK, cached entries:"]]
-          ckeys.each_with_index { |k,i|
-            if i % 18 == 0 and i > 0
-              if i < ckeys.size - 1
-                arr.last << "..."
+          items = []
+          scanitems.call { |ref| items << ref }
+          if items.empty?
+            # Filtering through cache_get enforces a purge of expired items
+            ckeys = @cache.keys.select{ |k| cache_get *k }
+            ckeys.map! { |s,i| "#{s}:#{i}" }
+            # grouping cache key data (heuristically) to not to overflow message
+            arr = [["OK, cached entries:"]]
+            ckeys.each_with_index { |k,i|
+              if i % 18 == 0 and i > 0
+                if i < ckeys.size - 1
+                  arr.last << "..."
+                end
+                arr << []
               end
-              arr << []
-            end
-            arr.last << k
-          }
-          arr.each { |e| say_to_chan e.join(" ") }
+              arr.last << k
+            }
+            arr.each { |e| say_to_chan e.join(" ") }
+          else
+            data = {}
+            items.each { |ref|
+              cache_get *ref
+              # we want the whole record, not just the
+              # data part, so we access the cache directly
+              rec = @cache[ref]
+              rec and data[ref] = rec
+            }
+            say_to_chan "OK, cached items:"
+            data.to_yaml.each_line { |l| say_to_chan l }
+          end
+          say_to_chan "<end>"
         when "help"
           ["This is #{@nick} bot on the mission to resolve Bugzilla and Gerrit references.",
            " ",
@@ -254,8 +277,8 @@ module BugzillaGerritBot
            "#{@gerrit}/#/c/42355.",
            " ",
            "Besides the following service commands are taken:",
-           %@"#{@nick}: show-cache" -- shows cached entries@,
            %@"#{@nick}: refetch <bugzilla or gerrit ref>, ..." -- refetch refs@,
+           %@"#{@nick}: show-cache [<ref>...]" -- shows cached entries@,
            %@"#{@nick}: forget" -- empty the cache@,
            %@"#{@nick}: help" -- shows this message.@,
           " ",
