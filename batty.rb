@@ -152,15 +152,18 @@ module BugzillaGerritBot
 
     MemberClass = ChanMember
 
-    def initialize admins: [], **opts
+    def initialize cache_file: nil, admins: [], **opts
+      @cache_file = cache_file
       @admins = admins
       super
-      (@opts||{}).delete :admins
+      %i[admins cache_file].each { |o|
+        (@opts||{}).delete o
+      }
     end
 
     attr_reader :admins
 
-    def init_cache cache_file: nil, cache_prefetch: []
+    def init_cache cache_file: @cache_file, cache_prefetch: []
       cache_file and begin
         @cache.merge! YAML.load_file cache_file
       rescue Errno::ENOENT
@@ -181,6 +184,23 @@ module BugzillaGerritBot
           }
         end
       }
+    end
+
+    def save_cache cache_file: @cache_file
+      unless cache_file
+        return nil, "no cache file specified"
+      end
+      # purge cache from expired records
+      @cache.each_key { |k| cache_get *k }
+      begin
+        open("#{cache_file}.tmp", File::WRONLY|File::CREAT|File::EXCL) { |f|
+          f << @cache.to_yaml
+        }
+        File.rename "#{cache_file}.tmp", cache_file
+        [true, "saved cache to #{cache_file}"]
+      rescue SystemCallError => x
+        [false, "error: failed save cache: #{x}"]
+      end
     end
 
   end
@@ -281,7 +301,8 @@ module BugzillaGerritBot
              %@"#{@nick}: {add,remove}-admin <name>@,
              %@"#{@nick}: channels -- show channels joined@,
              %@"#{@nick}: join <chan>@,
-             %@"#{@nick}: part <chan>@
+             %@"#{@nick}: part <chan>@,
+             %@"#{@nick}: save-cache [<file>] -- saves cache to default location or <file>@
             ]
           else
             []
@@ -369,6 +390,15 @@ module BugzillaGerritBot
             failmsg: "not in #{arg}") {
             bot.part
           }
+        when /\A(save-?cache|cache-?save)\Z/
+          if arg =~ %r@\A/@
+            say_to_chan "Hey #{nick}, please specify a relative path to save the cache to."
+          else
+            saveopts = arg.empty? ? {} : {cache_file: arg}
+            ok,msg = @bot.save_cache **saveopts
+            prefix = ok ? "OK" : "Hey #{nick}"
+            say_to_chan "#{prefix}, #{msg}."
+          end
         else
           say_to_chan "Hey #{nick}, I don't undestand command #{cmd}."
         end
@@ -460,11 +490,9 @@ if __FILE__ == $0
     puts "no channel specified"
     exit 1
   end
-  cache_init_opts = %i[cache_file cache_prefetch].map { |o|
-    [o, opts.delete(o)]
-  }.to_h
+  cache_prefetch = opts.delete :cache_prefetch
   gen = opts.delete :cache_prefetch_gen
-  gen and cache_init_opts[:cache_prefetch].concat(
+  gen and cache_prefetch.concat(
     IO.popen(gen, &:read).strip.split(/\s*,\s*/))
   pid_file = opts.delete :pid_file
   pid_file and open(pid_file, "w") { |f| f.puts $$ }
@@ -475,21 +503,11 @@ if __FILE__ == $0
   begin
     trap("INT"){ bot.quit }
     trap("USR1") {
-      opts[:cache].each_key { |k| bot.cache_get *k }
-      cache_file = cache_init_opts[:cache_file]
-      next unless cache_file
-      puts begin
-        open("#{cache_file}.tmp", File::WRONLY|File::CREAT|File::EXCL) { |f|
-          f << opts[:cache].to_yaml
-        }
-        File.rename "#{cache_file}.tmp", cache_file
-        "saved cache to #{cache_file}."
-      rescue SystemCallError => x
-        "error: failed save cache: #{x}"
-      end
+      _,msg = bot.save_cache
+      puts msg
     }
 
-    bot.init_cache **cache_init_opts
+    bot.init_cache cache_prefetch: cache_prefetch
     bot.connect
     bot.join *channels
     bot.run
