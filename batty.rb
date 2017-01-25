@@ -227,184 +227,181 @@ module BugzillaGerritBot
       say_to_chan %@Please message "#{@nick}: help" to know more.@
     end
 
-    def react_to nick, content
-
+    def respond_to nick, cmd, arg
       # bot admin/inquiry commands...
-      if content =~ /\A\s*#{Regexp.escape @nick}[:,\s]\s*(\S+)\s*(.*)/i
-        cmd,arg = $1.downcase,$2.strip
 
-        scanitems = proc { |&blk|
-          [[_BUGZILLA_RX, :bugzilla],
-           [_GERRIT_RX, :gerrit]
-          ].each { |rx, service|
-            arg.scan(rx).flatten.uniq.each { |id|
-              blk[[service, id]]
-            }
+      scanitems = proc { |&blk|
+        [[_BUGZILLA_RX, :bugzilla],
+         [_GERRIT_RX, :gerrit]
+        ].each { |rx, service|
+          arg.scan(rx).flatten.uniq.each { |id|
+            blk[[service, id]]
           }
         }
+      }
 
-        # General commands
-        do_admin = false
-        case cmd
-        when "forget"
-          @cache.clear
-          @accesslog.clear
-          say_to_chan "OK, I forgot everything!"
-        when "refetch"
-          items = []
-          scanitems.call { |ref|
-            cache_delete *ref
-            @accesslog.delete ref
-            items << ref
-          }
-          if items.empty?
-            say_to_chan "Hey #{nick}, nothing to refetch."
-          else
-            react_to nick, items.map { |service,id| "#{service}:#{id}" }.join(" ")
-          end
-        when /\A(show-?cache|cache-?show)\Z/
-          items = []
-          scanitems.call { |ref| items << ref }
-          if items.empty?
-            # Filtering through cache_get enforces a purge of expired items
-            ckeys = @cache.keys.select{ |k| cache_get *k }
-            ckeys.map! { |s,i| "#{s}:#{i}" }
-            # grouping cache key data (heuristically) to not to overflow message
-            arr = [["OK, cached entries:"]]
-            ckeys.each_with_index { |k,i|
-              if i % 18 == 0 and i > 0
-                if i < ckeys.size - 1
-                  arr.last << "..."
-                end
-                arr << []
-              end
-              arr.last << k
-            }
-            arr.each { |e| say_to_chan e.join(" ") }
-          else
-            data = {}
-            items.each { |ref|
-              cache_get *ref
-              # we want the whole record, not just the
-              # data part, so we access the cache directly
-              rec = @cache[ref]
-              rec and data[ref] = rec
-            }
-            say_to_chan "OK, cached items:"
-            data.to_yaml.each_line { |l| say_to_chan l }
-          end
-          say_to_chan "<end>"
-        when "help"
-          admin_help = if @bot.admins.include? @channel
-            [
-             %@"#{@nick}: admins -- show list of admins@,
-             %@"#{@nick}: {add,remove}-admin <name>@,
-             %@"#{@nick}: channels -- show channels joined@,
-             %@"#{@nick}: join <chan>@,
-             %@"#{@nick}: part <chan>@,
-             %@"#{@nick}: save-cache [<file>] -- saves cache to default location or <file>@
-            ]
-          else
-            []
-          end
-
-          help = [
-           "This is #{@nick} bot on the mission to resolve Bugzilla and Gerrit references.",
-           " ",
-           "Syntax:",
-           %@"#{BUGZILLA_TOKENS.join "|"} <bug-id>" for Bugzilla@,
-           %@"#{GERRIT_TOKENS.join "|"} <change-id>" for Gerrit.@,
-           "Case does not matter and a colon separator is also accepted,",
-           %@So "BZ:23432" and "Gerrit: 42355" are fine too.@,
-           "URLs like #{@bugzilla}/23432 and #{@gerrit}/42355 are understood,",
-           "and also variants like #{@bugzilla}/show-bug.cgi?id=23432 and",
-           "#{@gerrit}/#/c/42355.",
-           " ",
-           "Besides the following service commands are taken:",
-           %@"#{@nick}: refetch <bugzilla or gerrit ref>, ..." -- refetch refs@,
-           %@"#{@nick}: show-cache [<ref>...]" -- shows cached entries@,
-           %@"#{@nick}: forget" -- empty the cache@,
-           admin_help,
-           %@"#{@nick}: help" -- shows this message.@,
-           " ",
-           "Drop stars to https://github.com/csabahenk/simpleircbot ;)"
-          ]
-          help.flatten.each {|msg|
-            say_to_chan msg
-          }
+      # General commands
+      do_admin = false
+      case cmd
+      when "forget"
+        @cache.clear
+        @accesslog.clear
+        say_to_chan "OK, I forgot everything!"
+      when "refetch"
+        items = []
+        scanitems.call { |ref|
+          cache_delete *ref
+          @accesslog.delete ref
+          items << ref
+        }
+        if items.empty?
+          say_to_chan "Hey #{nick}, nothing to refetch."
         else
-          if @bot.admins.include? @channel
-            do_admin = true
-          else
-            say_to_chan "Hey #{nick}, I don't undestand command #{cmd}."
-          end
+          return items.map { |service,id| "#{service}:#{id}" }.join(" ")
         end
-        return unless do_admin
+      when /\A(show-?cache|cache-?show)\Z/
+        items = []
+        scanitems.call { |ref| items << ref }
+        if items.empty?
+          # Filtering through cache_get enforces a purge of expired items
+          ckeys = @cache.keys.select{ |k| cache_get *k }
+          ckeys.map! { |s,i| "#{s}:#{i}" }
+          # grouping cache key data (heuristically) to not to overflow message
+          arr = [["OK, cached entries:"]]
+          ckeys.each_with_index { |k,i|
+            if i % 18 == 0 and i > 0
+              if i < ckeys.size - 1
+                arr.last << "..."
+              end
+              arr << []
+            end
+            arr.last << k
+          }
+          arr.each { |e| say_to_chan e.join(" ") }
+        else
+          data = {}
+          items.each { |ref|
+            cache_get *ref
+            # we want the whole record, not just the
+            # data part, so we access the cache directly
+            rec = @cache[ref]
+            rec and data[ref] = rec
+          }
+          say_to_chan "OK, cached items:"
+          data.to_yaml.each_line { |l| say_to_chan l }
+        end
+        say_to_chan "<end>"
+      when "help"
+        admin_help = if @bot.admins.include? @channel
+          [
+           %@"#{@nick}: admins -- show list of admins@,
+           %@"#{@nick}: {add,remove}-admin <name>@,
+           %@"#{@nick}: channels -- show channels joined@,
+           %@"#{@nick}: join <chan>@,
+           %@"#{@nick}: part <chan>@,
+           %@"#{@nick}: save-cache [<file>] -- saves cache to default location or <file>@
+          ]
+        else
+          []
+        end
 
-        # Admin commands (only for private peers)
-
-        mgmt_cmd = proc { |kind: "name",cond:,okmsg:,failmsg:,&action|
-          say_to_chan(if arg.empty?
-            "Hey #{nick}, no #{kind} given."
-          elsif cond
-            action[]
-            "OK, #{okmsg}."
-          else
-            "Hey #{nick}, #{failmsg}."
-          end)
+        help = [
+         "This is #{@nick} bot on the mission to resolve Bugzilla and Gerrit references.",
+         " ",
+         "Syntax:",
+         %@"#{BUGZILLA_TOKENS.join "|"} <bug-id>" for Bugzilla@,
+         %@"#{GERRIT_TOKENS.join "|"} <change-id>" for Gerrit.@,
+         "Case does not matter and a colon separator is also accepted,",
+         %@So "BZ:23432" and "Gerrit: 42355" are fine too.@,
+         "URLs like #{@bugzilla}/23432 and #{@gerrit}/42355 are understood,",
+         "and also variants like #{@bugzilla}/show-bug.cgi?id=23432 and",
+         "#{@gerrit}/#/c/42355.",
+         " ",
+         "Besides the following service commands are taken:",
+         %@"#{@nick}: refetch <bugzilla or gerrit ref>, ..." -- refetch refs@,
+         %@"#{@nick}: show-cache [<ref>...]" -- shows cached entries@,
+         %@"#{@nick}: forget" -- empty the cache@,
+         admin_help,
+         %@"#{@nick}: help" -- shows this message.@,
+         " ",
+         "Drop stars to https://github.com/csabahenk/simpleircbot ;)"
+        ]
+        help.flatten.each {|msg|
+          say_to_chan msg
         }
-
-        case cmd
-        when "admins"
-          say_to_chan "OK, admins: #{@bot.admins.join " "}."
-        when /\Aadd-?admin|admin-?add\Z/
-          mgmt_cmd.call(
-            cond: !@bot.admins.include?(arg),
-            okmsg: "made #{arg} an admin",
-            failmsg: "#{arg} is already an admin") {
-            @bot.admins << arg
-          }
-        when /\Aremove-?admin|admin-?remove\Z/
-          mgmt_cmd.call(
-            cond: @bot.admins.include?(arg),
-            okmsg: "#{arg} is not an admin anymore",
-            failmsg: "#{arg} is not an admin") {
-            @bot.admins.delete arg
-          }
-        when "channels"
-          say_to_chan "OK, channels: #{@bot.bots.keys.join " "}."
-        when "join"
-          mgmt_cmd.call(
-            kind: "channel",
-            cond: !@bot.bots.include?(arg),
-            okmsg: "joined #{arg}",
-            failmsg: "already in #{arg}") {
-            @bot.join arg
-          }
-        when "part"
-          bot = @bot.bots.delete arg
-          mgmt_cmd.call(
-            kind: "channel",
-            cond: bot,
-            okmsg: "parted from #{arg}",
-            failmsg: "not in #{arg}") {
-            bot.part
-          }
-        when /\A(save-?cache|cache-?save)\Z/
-          if arg =~ %r@\A/@
-            say_to_chan "Hey #{nick}, please specify a relative path to save the cache to."
-          else
-            saveopts = arg.empty? ? {} : {cache_file: arg}
-            ok,msg = @bot.save_cache **saveopts
-            prefix = ok ? "OK" : "Hey #{nick}"
-            say_to_chan "#{prefix}, #{msg}."
-          end
+      else
+        if @bot.admins.include? @channel
+          do_admin = true
         else
           say_to_chan "Hey #{nick}, I don't undestand command #{cmd}."
         end
-        return
       end
+      return unless do_admin
 
+      # Admin commands (only for private peers)
+
+      mgmt_cmd = proc { |kind: "name",cond:,okmsg:,failmsg:,&action|
+        say_to_chan(if arg.empty?
+          "Hey #{nick}, no #{kind} given."
+        elsif cond
+          action[]
+          "OK, #{okmsg}."
+        else
+          "Hey #{nick}, #{failmsg}."
+        end)
+      }
+
+      case cmd
+      when "admins"
+        say_to_chan "OK, admins: #{@bot.admins.join " "}."
+      when /\Aadd-?admin|admin-?add\Z/
+        mgmt_cmd.call(
+          cond: !@bot.admins.include?(arg),
+          okmsg: "made #{arg} an admin",
+          failmsg: "#{arg} is already an admin") {
+          @bot.admins << arg
+        }
+      when /\Aremove-?admin|admin-?remove\Z/
+        mgmt_cmd.call(
+          cond: @bot.admins.include?(arg),
+          okmsg: "#{arg} is not an admin anymore",
+          failmsg: "#{arg} is not an admin") {
+          @bot.admins.delete arg
+        }
+      when "channels"
+        say_to_chan "OK, channels: #{@bot.bots.keys.join " "}."
+      when "join"
+        mgmt_cmd.call(
+          kind: "channel",
+          cond: !@bot.bots.include?(arg),
+          okmsg: "joined #{arg}",
+          failmsg: "already in #{arg}") {
+          @bot.join arg
+        }
+      when "part"
+        bot = @bot.bots.delete arg
+        mgmt_cmd.call(
+          kind: "channel",
+          cond: bot,
+          okmsg: "parted from #{arg}",
+          failmsg: "not in #{arg}") {
+          bot.part
+        }
+      when /\A(save-?cache|cache-?save)\Z/
+        if arg =~ %r@\A/@
+          say_to_chan "Hey #{nick}, please specify a relative path to save the cache to."
+        else
+          saveopts = arg.empty? ? {} : {cache_file: arg}
+          ok,msg = @bot.save_cache **saveopts
+          prefix = ok ? "OK" : "Hey #{nick}"
+          say_to_chan "#{prefix}, #{msg}."
+        end
+      else
+        say_to_chan "Hey #{nick}, I don't undestand command #{cmd}."
+      end
+    end
+
+    def react_to nick, content
       hushed = proc { |service,id|
         @hush and (@accesslog[[service, id]]||Time.at(0)) + @hush > Time.now
       }

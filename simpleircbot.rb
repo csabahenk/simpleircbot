@@ -75,7 +75,7 @@ module SimpleIrcBot
         when /^:(#{SimpleIrcBot.regexp_join privs})!.*PRIVMSG #{Regexp.escape @nick} :(.*)$/
           [$1,$1,$2]
         end
-        chan and @bots[chan].react_to nick,content
+        chan and @bots[chan].read_msg nick,content
       end
     end
 
@@ -129,7 +129,28 @@ module SimpleIrcBot
       say "PRIVMSG #{@channel} :#{msg.join ", "}"
     end
 
+    def respond_to nick, cmd, arg
+      :pass
+    end
+
     def react_to nick, content
+    end
+
+    def read_msg nick, content
+      if content =~ /\A\s*#{Regexp.escape @nick}[:,\s]\s*(\S+)\s*(.*)/i
+        cmd,arg = $1.downcase,$2.strip
+        new_content = respond_to(nick, cmd, arg)
+        case new_content
+        when :pass,true
+        when String
+          content = new_content
+        when nil,false
+          return
+        else
+          raise ArgumentError, "bad content"
+        end
+      end
+      react_to nick,content
     end
 
     def part
