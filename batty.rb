@@ -152,6 +152,14 @@ module BugzillaGerritBot
 
     MemberClass = ChanMember
 
+    def initialize admins: [], **opts
+      @admins = admins
+      super
+      (@opts||{}).delete :admins
+    end
+
+    attr_reader :admins
+
     def init_cache cache_file: nil, cache_prefetch: []
       cache_file and begin
         @cache.merge! YAML.load_file cache_file
@@ -215,6 +223,8 @@ module BugzillaGerritBot
           }
         }
 
+        # General commands
+        do_admin = false
         case cmd
         when "forget"
           @cache.clear
@@ -265,7 +275,20 @@ module BugzillaGerritBot
           end
           say_to_chan "<end>"
         when "help"
-          ["This is #{@nick} bot on the mission to resolve Bugzilla and Gerrit references.",
+          admin_help = if @bot.admins.include? @channel
+            [
+             %@"#{@nick}: admins -- show list of admins@,
+             %@"#{@nick}: {add,remove}-admin <name>@,
+             %@"#{@nick}: channels -- show channels joined@,
+             %@"#{@nick}: join <chan>@,
+             %@"#{@nick}: part <chan>@
+            ]
+          else
+            []
+          end
+
+          help = [
+           "This is #{@nick} bot on the mission to resolve Bugzilla and Gerrit references.",
            " ",
            "Syntax:",
            %@"#{BUGZILLA_TOKENS.join "|"} <bug-id>" for Bugzilla@,
@@ -280,10 +303,71 @@ module BugzillaGerritBot
            %@"#{@nick}: refetch <bugzilla or gerrit ref>, ..." -- refetch refs@,
            %@"#{@nick}: show-cache [<ref>...]" -- shows cached entries@,
            %@"#{@nick}: forget" -- empty the cache@,
+           admin_help,
            %@"#{@nick}: help" -- shows this message.@,
-          " ",
-          "Drop stars to https://github.com/csabahenk/simpleircbot ;)"].each {|msg|
+           " ",
+           "Drop stars to https://github.com/csabahenk/simpleircbot ;)"
+          ]
+          help.flatten.each {|msg|
             say_to_chan msg
+          }
+        else
+          if @bot.admins.include? @channel
+            do_admin = true
+          else
+            say_to_chan "Hey #{nick}, I don't undestand command #{cmd}."
+          end
+        end
+        return unless do_admin
+
+        # Admin commands (only for private peers)
+
+        mgmt_cmd = proc { |kind: "name",cond:,okmsg:,failmsg:,&action|
+          say_to_chan(if arg.empty?
+            "Hey #{nick}, no #{kind} given."
+          elsif cond
+            action[]
+            "OK, #{okmsg}."
+          else
+            "Hey #{nick}, #{failmsg}."
+          end)
+        }
+
+        case cmd
+        when "admins"
+          say_to_chan "OK, admins: #{@bot.admins.join " "}."
+        when /\Aadd-?admin|admin-?add\Z/
+          mgmt_cmd.call(
+            cond: !@bot.admins.include?(arg),
+            okmsg: "made #{arg} an admin",
+            failmsg: "#{arg} is already an admin") {
+            @bot.admins << arg
+          }
+        when /\Aremove-?admin|admin-?remove\Z/
+          mgmt_cmd.call(
+            cond: @bot.admins.include?(arg),
+            okmsg: "#{arg} is not an admin anymore",
+            failmsg: "#{arg} is not an admin") {
+            @bot.admins.delete arg
+          }
+        when "channels"
+          say_to_chan "OK, channels: #{@bot.bots.keys.join " "}."
+        when "join"
+          mgmt_cmd.call(
+            kind: "channel",
+            cond: !@bot.bots.include?(arg),
+            okmsg: "joined #{arg}",
+            failmsg: "already in #{arg}") {
+            @bot.join arg
+          }
+        when "part"
+          bot = @bot.bots.delete arg
+          mgmt_cmd.call(
+            kind: "channel",
+            cond: bot,
+            okmsg: "parted from #{arg}",
+            failmsg: "not in #{arg}") {
+            bot.part
           }
         else
           say_to_chan "Hey #{nick}, I don't undestand command #{cmd}."
@@ -351,6 +435,7 @@ if __FILE__ == $0
     server: "irc.freenode.net",
     nick: "batty",
     hush: 0,
+    admins: [],
   }
   MAIN_OPTS = {
     cache_prefetch: [],

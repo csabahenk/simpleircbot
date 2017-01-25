@@ -48,6 +48,8 @@ module SimpleIrcBot
       _get_common_irc_opts **opts
     end
 
+    attr_reader :bots
+
     def connect
       @socket = TCPSocket.open(@server, @port)
       say "NICK #{@nick}"
@@ -79,7 +81,8 @@ module SimpleIrcBot
 
     def join *channels
       channels.each { |chan|
-        @bots[chan] = @memberclass.new(socket: @socket, channel: chan, **@opts)
+        @bots[chan] = @memberclass.new(socket: @socket, channel: chan,
+                                       bot: self, **@opts)
         @bots[chan].join
       }
     end
@@ -95,10 +98,11 @@ module SimpleIrcBot
   class ChanMember
     include SimpleIrcBot
 
-    def initialize(channel:, socket:, greeting: true, **opts)
+    def initialize(channel:, socket:, greeting: true, bot:, **opts)
       @channel = channel
       @socket = socket
       @greeting = greeting
+      @bot = bot
       _initialize_chanmember _get_common_irc_opts(**opts)
     end
 
