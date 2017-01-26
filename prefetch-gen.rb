@@ -8,18 +8,11 @@ OPTS = {
   gerrit_alt: [],
   bugzilla_url: String,
   gerrit_url: String,
+  server: "<ignored>",
+  nick: "<ignored>",
 }
 
-class OptionSink
-  def initialize _stub: nil
-  end
-end
-
-class StubBot < OptionSink
-  include BugzillaGerritBot
-end
-
-bot = StubBot.new(**SimpleOpts.get(OPTS))
+bot = BugzillaGerritBot.new(**SimpleOpts.get(OPTS))
 
 log = $<.read
 data = {"bz"=>:_BUGZILLA_RX, "gerrit"=>:_GERRIT_RX}.map { |t,rx|

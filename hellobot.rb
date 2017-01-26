@@ -4,10 +4,10 @@ require 'simpleopts'
 require 'simpleircbot'
 
 
-class HelloMember < SimpleIrcBot::ChanMember
+class HelloBot < SimpleIrcBot
 
-  def respond_to nick, cmd, arg
-    say_to_chan "Hello, #{nick}!"
+  def respond_to chan, nick, cmd, arg
+    say_to chan, "Hello, #{nick}!"
   end
 
 end
@@ -23,7 +23,7 @@ OPTS = {
 opts = SimpleOpts.get **OPTS
 channels = opts.delete :channels
 
-bot = SimpleIrcBot::Bot.new memberclass: HelloMember, **opts
+bot = HelloBot.new **opts
 trap("INT"){ bot.quit }
 bot.connect
 bot.join *channels

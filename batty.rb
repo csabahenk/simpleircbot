@@ -11,18 +11,14 @@ require 'simpleircbot'
 ######################################################################################
 
 
-module BugzillaGerritBot
+class BugzillaGerritBot < SimpleIrcBot
 
-  def initialize **opts
-    (@opts||={}).merge! opts
-    super **_initialize_bugzillageritbot(**opts)
-  end
-
-  def _initialize_bugzillageritbot(
+  def initialize(
         bugzilla_url:, gerrit_url: ,
         bugzilla_alt: [], gerrit_alt: [],
         gerrit_user: nil, gerrit_port: 29418,
-        cache: {}, cache_expiry: nil, hush: nil,
+        cache: {}, cache_expiry: nil,
+        cache_file: nil, admins: [], hush: nil,
         **opts)
     @bugzilla = bugzilla_url.sub(%r@\Ahttps?://@, "")
     @bugzilla_alt = bugzilla_alt
@@ -32,8 +28,11 @@ module BugzillaGerritBot
     @gerrit_port = gerrit_port
     @cache = cache
     @cache_expiry = (cache_expiry||0) <= 0 ? nil : cache_expiry
+    @cache_file = cache_file
+    @admins = admins
     @hush = (hush||0) <= 0 ? nil : hush
-    opts
+    @accesslog = {}
+    super **opts
   end
 
   def cache_get *keys, verbose: false
@@ -143,304 +142,273 @@ module BugzillaGerritBot
     }
   end
 
-
-  class ChanMember < SimpleIrcBot::ChanMember
+  def init_cache cache_file: @cache_file, cache_prefetch: []
+    cache_file and begin
+      @cache.merge! YAML.load_file cache_file
+    rescue Errno::ENOENT
+      puts "warning: cache file does not exist"
+    end
+    prefetch_size = cache_prefetch.size
+    cache_prefetch.each_with_index { |token,i|
+      service_tok, id = token.split(":", 2)
+      service = TOKEN_MAP[service_tok]
+      print "pre-fetching #{i+1}/#{prefetch_size}... "
+      val = cache_fetch service, id
+      if service == :gerrit and val
+        j = 1
+        gerrit_get_bugs(val) { |bz|
+          print "pre-fetching #{i+1}:#{j}/#{prefetch_size}..."
+          cache_fetch :bugzilla, bz
+          j += 1
+        }
+      end
+    }
   end
 
-  class Bot < SimpleIrcBot::Bot
-    include BugzillaGerritBot
-
-    MemberClass = ChanMember
-
-    def initialize cache_file: nil, admins: [], **opts
-      @cache_file = cache_file
-      @admins = admins
-      super
-      %i[admins cache_file].each { |o|
-        (@opts||{}).delete o
+  def save_cache cache_file: @cache_file
+    unless cache_file
+      return nil, "no cache file specified"
+    end
+    # purge cache from expired records
+    @cache.each_key { |k| cache_get *k }
+    begin
+      open("#{cache_file}.tmp", File::WRONLY|File::CREAT|File::EXCL) { |f|
+        f << @cache.to_yaml
       }
+      File.rename "#{cache_file}.tmp", cache_file
+      [true, "saved cache to #{cache_file}"]
+    rescue SystemCallError => x
+      [false, "error: failed save cache: #{x}"]
     end
-
-    attr_reader :admins
-
-    def init_cache cache_file: @cache_file, cache_prefetch: []
-      cache_file and begin
-        @cache.merge! YAML.load_file cache_file
-      rescue Errno::ENOENT
-        puts "warning: cache file does not exist"
-      end
-      prefetch_size = cache_prefetch.size
-      cache_prefetch.each_with_index { |token,i|
-        service_tok, id = token.split(":", 2)
-        service = TOKEN_MAP[service_tok]
-        print "pre-fetching #{i+1}/#{prefetch_size}... "
-        val = cache_fetch service, id
-        if service == :gerrit and val
-          j = 1
-          gerrit_get_bugs(val) { |bz|
-            print "pre-fetching #{i+1}:#{j}/#{prefetch_size}..."
-            cache_fetch :bugzilla, bz
-            j += 1
-          }
-        end
-      }
-    end
-
-    def save_cache cache_file: @cache_file
-      unless cache_file
-        return nil, "no cache file specified"
-      end
-      # purge cache from expired records
-      @cache.each_key { |k| cache_get *k }
-      begin
-        open("#{cache_file}.tmp", File::WRONLY|File::CREAT|File::EXCL) { |f|
-          f << @cache.to_yaml
-        }
-        File.rename "#{cache_file}.tmp", cache_file
-        [true, "saved cache to #{cache_file}"]
-      rescue SystemCallError => x
-        [false, "error: failed save cache: #{x}"]
-      end
-    end
-
   end
 
+  def greet chan
+    say_to chan, "Whenever I see references to Bugzilla bugs or Gerrit changes, like..."
+    say_to chan, "... BZ 36734, gerrit:531232 ..."
+    say_to chan, "... or URLs like..."
+    say_to chan, " #{@bugzilla}/36734, #{@gerrit}/531232 ..."
+    sleep 1
+    say_to chan, " "
+    say_to chan, "... I tell it like it is!".upcase
+    sleep 1
+    say_to chan, " "
+    say_to chan, %@Please message "#{@nick}: help" to know more.@
+  end
 
-  class ChanMember < SimpleIrcBot::ChanMember
-    include BugzillaGerritBot
+  def respond_to chan, nick, cmd, arg
+    # bot admin/inquiry commands...
 
-    def initialize **opts
-      @accesslog = {}
-      super
-    end
-
-    def greet
-      say_to_chan "Whenever I see references to Bugzilla bugs or Gerrit changes, like..."
-      say_to_chan "... BZ 36734, gerrit:531232 ..."
-      say_to_chan "... or URLs like..."
-      say_to_chan " #{@bugzilla}/36734, #{@gerrit}/531232 ..."
-      sleep 1
-      say_to_chan " "
-      say_to_chan "... I tell it like it is!".upcase
-      sleep 1
-      say_to_chan " "
-      say_to_chan %@Please message "#{@nick}: help" to know more.@
-    end
-
-    def respond_to nick, cmd, arg
-      # bot admin/inquiry commands...
-
-      scanitems = proc { |&blk|
-        [[_BUGZILLA_RX, :bugzilla],
-         [_GERRIT_RX, :gerrit]
-        ].each { |rx, service|
-          arg.scan(rx).flatten.uniq.each { |id|
-            blk[[service, id]]
-          }
+    scanitems = proc { |&blk|
+      [[_BUGZILLA_RX, :bugzilla],
+       [_GERRIT_RX, :gerrit]
+      ].each { |rx, service|
+        arg.scan(rx).flatten.uniq.each { |id|
+          blk[[service, id]]
         }
       }
+    }
 
-      # General commands
-      do_admin = false
-      case cmd
-      when "forget"
-        @cache.clear
-        @accesslog.clear
-        say_to_chan "OK, I forgot everything!"
-      when "refetch"
-        items = []
-        scanitems.call { |ref|
-          cache_delete *ref
-          @accesslog.delete ref
-          items << ref
-        }
-        if items.empty?
-          say_to_chan "Hey #{nick}, nothing to refetch."
-        else
-          return items.map { |service,id| "#{service}:#{id}" }.join(" ")
-        end
-      when /\A(show-?cache|cache-?show)\Z/
-        items = []
-        scanitems.call { |ref| items << ref }
-        if items.empty?
-          # Filtering through cache_get enforces a purge of expired items
-          ckeys = @cache.keys.select{ |k| cache_get *k }
-          ckeys.map! { |s,i| "#{s}:#{i}" }
-          # grouping cache key data (heuristically) to not to overflow message
-          arr = [["OK, cached entries:"]]
-          ckeys.each_with_index { |k,i|
-            if i % 18 == 0 and i > 0
-              if i < ckeys.size - 1
-                arr.last << "..."
-              end
-              arr << []
+    # General commands
+    do_admin = false
+    case cmd
+    when "forget"
+      @cache.clear
+      @accesslog.clear
+      say_to chan, "OK, I forgot everything!"
+    when "refetch"
+      items = []
+      scanitems.call { |ref|
+        cache_delete *ref
+        @accesslog.delete ref
+        items << ref
+      }
+      if items.empty?
+        say_to chan, "Hey #{nick}, nothing to refetch."
+      else
+        return items.map { |service,id| "#{service}:#{id}" }.join(" ")
+      end
+    when /\A(show-?cache|cache-?show)\Z/
+      items = []
+      scanitems.call { |ref| items << ref }
+      if items.empty?
+        # Filtering through cache_get enforces a purge of expired items
+        ckeys = @cache.keys.select{ |k| cache_get *k }
+        ckeys.map! { |s,i| "#{s}:#{i}" }
+        # grouping cache key data (heuristically) to not to overflow message
+        arr = [["OK, cached entries:"]]
+        ckeys.each_with_index { |k,i|
+          if i % 18 == 0 and i > 0
+            if i < ckeys.size - 1
+              arr.last << "..."
             end
-            arr.last << k
-          }
-          arr.each { |e| say_to_chan e.join(" ") }
-        else
-          data = {}
-          items.each { |ref|
-            cache_get *ref
-            # we want the whole record, not just the
-            # data part, so we access the cache directly
-            rec = @cache[ref]
-            rec and data[ref] = rec
-          }
-          say_to_chan "OK, cached items:"
-          data.to_yaml.each_line { |l| say_to_chan l }
-        end
-        say_to_chan "<end>"
-      when "help"
-        admin_help = if @bot.admins.include? @channel
-          [
-           %@"#{@nick}: admins -- show list of admins@,
-           %@"#{@nick}: {add,remove}-admin <name>@,
-           %@"#{@nick}: channels -- show channels joined@,
-           %@"#{@nick}: join <chan>@,
-           %@"#{@nick}: part <chan>@,
-           %@"#{@nick}: save-cache [<file>] -- saves cache to default location or <file>@
-          ]
-        else
-          []
-        end
-
-        help = [
-         "This is #{@nick} bot on the mission to resolve Bugzilla and Gerrit references.",
-         " ",
-         "Syntax:",
-         %@"#{BUGZILLA_TOKENS.join "|"} <bug-id>" for Bugzilla@,
-         %@"#{GERRIT_TOKENS.join "|"} <change-id>" for Gerrit.@,
-         "Case does not matter and a colon separator is also accepted,",
-         %@So "BZ:23432" and "Gerrit: 42355" are fine too.@,
-         "URLs like #{@bugzilla}/23432 and #{@gerrit}/42355 are understood,",
-         "and also variants like #{@bugzilla}/show-bug.cgi?id=23432 and",
-         "#{@gerrit}/#/c/42355.",
-         " ",
-         "Besides the following service commands are taken:",
-         %@"#{@nick}: refetch <bugzilla or gerrit ref>, ..." -- refetch refs@,
-         %@"#{@nick}: show-cache [<ref>...]" -- shows cached entries@,
-         %@"#{@nick}: forget" -- empty the cache@,
-         admin_help,
-         %@"#{@nick}: help" -- shows this message.@,
-         " ",
-         "Drop stars to https://github.com/csabahenk/simpleircbot ;)"
+            arr << []
+          end
+          arr.last << k
+        }
+        arr.each { |e| say_to chan, e.join(" ") }
+      else
+        data = {}
+        items.each { |ref|
+          cache_get *ref
+          # we want the whole record, not just the
+          # data part, so we access the cache directly
+          rec = @cache[ref]
+          rec and data[ref] = rec
+        }
+        say_to chan, "OK, cached items:"
+        data.to_yaml.each_line { |l| say_to chan, l }
+      end
+      say_to chan, "<end>"
+    when "help"
+      admin_help = if @admins.include? chan
+        [
+         %@"#{@nick}: admins -- show list of admins@,
+         %@"#{@nick}: {add,remove}-admin <name>@,
+         %@"#{@nick}: channels -- show channels joined@,
+         %@"#{@nick}: join <chan>@,
+         %@"#{@nick}: part <chan>@,
+         %@"#{@nick}: save-cache [<file>] -- saves cache to default location or <file>@
         ]
-        help.flatten.each {|msg|
-          say_to_chan msg
-        }
       else
-        if @bot.admins.include? @channel
-          do_admin = true
-        else
-          say_to_chan "Hey #{nick}, I don't undestand command #{cmd}."
-        end
+        []
       end
-      return unless do_admin
 
-      # Admin commands (only for private peers)
-
-      mgmt_cmd = proc { |kind: "name",cond:,okmsg:,failmsg:,&action|
-        say_to_chan(if arg.empty?
-          "Hey #{nick}, no #{kind} given."
-        elsif cond
-          action[]
-          "OK, #{okmsg}."
-        else
-          "Hey #{nick}, #{failmsg}."
-        end)
+      help = [
+       "This is #{@nick} bot on the mission to resolve Bugzilla and Gerrit references.",
+       " ",
+       "Syntax:",
+       %@"#{BUGZILLA_TOKENS.join "|"} <bug-id>" for Bugzilla@,
+       %@"#{GERRIT_TOKENS.join "|"} <change-id>" for Gerrit.@,
+       "Case does not matter and a colon separator is also accepted,",
+       %@So "BZ:23432" and "Gerrit: 42355" are fine too.@,
+       "URLs like #{@bugzilla}/23432 and #{@gerrit}/42355 are understood,",
+       "and also variants like #{@bugzilla}/show-bug.cgi?id=23432 and",
+       "#{@gerrit}/#/c/42355.",
+       " ",
+       "Besides the following service commands are taken:",
+       %@"#{@nick}: refetch <bugzilla or gerrit ref>, ..." -- refetch refs@,
+       %@"#{@nick}: show-cache [<ref>...]" -- shows cached entries@,
+       %@"#{@nick}: forget" -- empty the cache@,
+       admin_help,
+       %@"#{@nick}: help" -- shows this message.@,
+       " ",
+       "Drop stars to https://github.com/csabahenk/simpleircbot ;)"
+      ]
+      help.flatten.each {|msg|
+        say_to chan, msg
       }
-
-      case cmd
-      when "admins"
-        say_to_chan "OK, admins: #{@bot.admins.join " "}."
-      when /\Aadd-?admin|admin-?add\Z/
-        mgmt_cmd.call(
-          cond: !@bot.admins.include?(arg),
-          okmsg: "made #{arg} an admin",
-          failmsg: "#{arg} is already an admin") {
-          @bot.admins << arg
-        }
-      when /\Aremove-?admin|admin-?remove\Z/
-        mgmt_cmd.call(
-          cond: @bot.admins.include?(arg),
-          okmsg: "#{arg} is not an admin anymore",
-          failmsg: "#{arg} is not an admin") {
-          @bot.admins.delete arg
-        }
-      when "channels"
-        say_to_chan "OK, channels: #{@bot.bots.keys.join " "}."
-      when "join"
-        mgmt_cmd.call(
-          kind: "channel",
-          cond: !@bot.bots.include?(arg),
-          okmsg: "joined #{arg}",
-          failmsg: "already in #{arg}") {
-          @bot.join arg
-        }
-      when "part"
-        bot = @bot.bots.delete arg
-        mgmt_cmd.call(
-          kind: "channel",
-          cond: bot,
-          okmsg: "parted from #{arg}",
-          failmsg: "not in #{arg}") {
-          bot.part
-        }
-      when /\A(save-?cache|cache-?save)\Z/
-        if arg =~ %r@\A/@
-          say_to_chan "Hey #{nick}, please specify a relative path to save the cache to."
-        else
-          saveopts = arg.empty? ? {} : {cache_file: arg}
-          ok,msg = @bot.save_cache **saveopts
-          prefix = ok ? "OK" : "Hey #{nick}"
-          say_to_chan "#{prefix}, #{msg}."
-        end
+    else
+      if @admins.include? chan
+        do_admin = true
       else
-        say_to_chan "Hey #{nick}, I don't undestand command #{cmd}."
+        say_to chan, "Hey #{nick}, I don't undestand command #{cmd}."
       end
     end
+    return unless do_admin
 
-    def react_to nick, content
-      hushed = proc { |service,id|
-        @hush and (@accesslog[[service, id]]||Time.at(0)) + @hush > Time.now
+    # Admin commands (only for private peers)
+
+    mgmt_cmd = proc { |kind: "name",cond:,okmsg:,failmsg:,&action|
+      say_to chan,(if arg.empty?
+        "Hey #{nick}, no #{kind} given."
+      elsif cond
+        action[]
+        "OK, #{okmsg}."
+      else
+        "Hey #{nick}, #{failmsg}."
+      end)
+    }
+
+    case cmd
+    when "admins"
+      say_to chan, "OK, admins: #{@admins.join " "}."
+    when /\Aadd-?admin|admin-?add\Z/
+      mgmt_cmd.call(
+        cond: !@admins.include?(arg),
+        okmsg: "made #{arg} an admin",
+        failmsg: "#{arg} is already an admin") {
+        @admins << arg
       }
-
-      # Bugzilla #1...
-      process_bugzilla = proc { |bz,decor=""|
-        buginfo = cache_fetch(:bugzilla, bz)
-        unless hushed[:bugzilla, bz]
-          @accesslog[[:bugzilla, bz]] = Time.now
-          say_to_chan decor + bugzilla_url(bz), buginfo
-        end
+    when /\Aremove-?admin|admin-?remove\Z/
+      mgmt_cmd.call(
+        cond: @admins.include?(arg),
+        okmsg: "#{arg} is not an admin anymore",
+        failmsg: "#{arg} is not an admin") {
+        @admins.delete arg
       }
-      bugs = content.scan(_BUGZILLA_RX).flatten.uniq
-
-      # Gerrit...
-      content.scan(_GERRIT_RX).flatten.uniq.each { |change|
-        changeinfo = cache_fetch(:gerrit, change)
-        if hushed[:gerrit, change]
-          next
-        else
-          @accesslog[[:gerrit, change]] = Time.now
-        end
-        case changeinfo
-        when Hash
-          say_to_chan *changeinfo.values_at("url", "subject")
-          gerrit_get_bugs(changeinfo) {|bz|
-            process_bugzilla[bz, "`-> "]
-            # We don't need to report this bz once more.
-            bugs.delete bz
-          }
-        else
-          say_to_chan "#{@gerrit}: change #{change} not found"
-        end
+    when "channels"
+      say_to chan, "OK, channels: #{@channels.to_a.join " "}."
+    when "join"
+      mgmt_cmd.call(
+        kind: "channel",
+        cond: !@channels.include?(arg),
+        okmsg: "joined #{arg}",
+        failmsg: "already in #{arg}") {
+        join arg
       }
-
-      # Bugzilla #2
-      bugs.each &process_bugzilla
+    when "part"
+      mgmt_cmd.call(
+        kind: "channel",
+        cond: @channels.include?(arg),
+        okmsg: "parted from #{arg}",
+        failmsg: "not in #{arg}") {
+        part arg
+      }
+    when "quit"
+      say_to chan, "OK, quitting..."
+      quit
+    when /\A(save-?cache|cache-?save)\Z/
+      if arg =~ %r@\A/@
+        say_to chan, "Hey #{nick}, please specify a relative path to save the cache to."
+      else
+        saveopts = arg.empty? ? {} : {cache_file: arg}
+        ok,msg = save_cache **saveopts
+        prefix = ok ? "OK" : "Hey #{nick}"
+        say_to chan, "#{prefix}, #{msg}."
+      end
+    else
+      say_to chan, "Hey #{nick}, I don't undestand command #{cmd}."
     end
+  end
 
+  def react_to chan, nick, content
+    hushed = proc { |service,id|
+      @hush and (@accesslog[[service, id]]||Time.at(0)) + @hush > Time.now
+    }
+
+    # Bugzilla #1...
+    process_bugzilla = proc { |bz,decor=""|
+      buginfo = cache_fetch(:bugzilla, bz)
+      unless hushed[:bugzilla, bz]
+        @accesslog[[:bugzilla, bz]] = Time.now
+        say_to chan, decor + bugzilla_url(bz), buginfo
+      end
+    }
+    bugs = content.scan(_BUGZILLA_RX).flatten.uniq
+
+    # Gerrit...
+    content.scan(_GERRIT_RX).flatten.uniq.each { |change|
+      changeinfo = cache_fetch(:gerrit, change)
+      if hushed[:gerrit, change]
+        next
+      else
+        @accesslog[[:gerrit, change]] = Time.now
+      end
+      case changeinfo
+      when Hash
+        say_to chan, *changeinfo.values_at("url", "subject")
+        gerrit_get_bugs(changeinfo) {|bz|
+          process_bugzilla[bz, "`-> "]
+          # We don't need to report this bz once more.
+          bugs.delete bz
+        }
+      else
+        say_to chan, "#{@gerrit}: change #{change} not found"
+      end
+    }
+
+    # Bugzilla #2
+    bugs.each &process_bugzilla
   end
 
 end
@@ -459,6 +427,7 @@ if __FILE__ == $0
     gerrit_alt: [],
     gerrit_url: String,
     cache_expiry: 168,
+    cache_file: "",
     server: "irc.freenode.net",
     nick: "batty",
     hush: 0,
@@ -469,7 +438,6 @@ if __FILE__ == $0
     cache_prefetch_gen: "",
     config_file: "",
     pid_file: "",
-    cache_file: "",
     channels: Array,
   }
   # at the bottom, so that
@@ -494,8 +462,7 @@ if __FILE__ == $0
   pid_file = opts.delete :pid_file
   pid_file and open(pid_file, "w") { |f| f.puts $$ }
 
-  opts[:cache] = {}
-  bot = BugzillaGerritBot::Bot.new(**opts)
+  bot = BugzillaGerritBot.new(**opts)
 
   begin
     trap("INT"){ bot.quit }
