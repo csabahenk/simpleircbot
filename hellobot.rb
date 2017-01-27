@@ -1,12 +1,13 @@
 #!/usr/bin/env ruby
 
 require 'simpleopts'
-require 'simpleircbot'
+require 'simpleircbot/core'
+require 'simpleircbot/plugins'
 
 
 class HelloBot < SimpleIrcBot
-  include SimpleIrcBot::Commands
-  include SimpleIrcBot::Admin
+  include SimpleIrcBot::Plugins::Commands
+  include SimpleIrcBot::Plugins::Admin
 
   def command_hello chan, nick, arg
     say_to chan, "Hello, #{nick}" + (arg ? ", #{arg}" : "!")

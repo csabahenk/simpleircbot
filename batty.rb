@@ -5,16 +5,17 @@ require 'cgi'
 require 'yaml'
 
 require 'simpleopts'
-require 'simpleircbot'
+require 'simpleircbot/core'
+require 'simpleircbot/plugins'
 
 
 ######################################################################################
 
 
 class BugzillaGerritBot < SimpleIrcBot
-  include SimpleIrcBot::Commands
-  include SimpleIrcBot::Admin
-  include SimpleIrcBot::Cache
+  include SimpleIrcBot::Plugins::Commands
+  include SimpleIrcBot::Plugins::Admin
+  include SimpleIrcBot::Plugins::Cache
 
   def initialize(
         bugzilla_url:, gerrit_url: ,
