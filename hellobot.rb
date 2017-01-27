@@ -5,9 +5,16 @@ require 'simpleircbot'
 
 
 class HelloBot < SimpleIrcBot
+  include SimpleIrcBot::Commands
+  include SimpleIrcBot::Admin
 
-  def respond_to chan, nick, cmd, arg
-    say_to chan, "Hello, #{nick}!"
+  def command_hello chan, nick, arg
+    say_to chan, "Hello, #{nick}" + (arg ? ", #{arg}" : "!")
+  end
+
+  def help chan
+    yield :cmd, "hello", "[<greeting>] -- helloes back"
+    super
   end
 
 end
@@ -18,6 +25,7 @@ OPTS = {
   server: String,
   port: 6667,
   channels: [],
+  admins: [],
 }
 
 opts = SimpleOpts.get **OPTS
