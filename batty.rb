@@ -92,13 +92,14 @@ class BugzillaGerritBot < SimpleIrcBot
       # but JSON can do only a single object, so instead we use YAML
       changeinfo = YAML.load changedata
     rescue Psych::SyntaxError
+      false
     end
     case changeinfo
     when Hash
       changeinfo = %w[url subject commitMessage].instance_eval {
         zip(changeinfo.values_at *self).to_h
       }
-      changeinfo.values.include? nil and changeinfo = nil
+      changeinfo.values.include? nil and changeinfo = false
     end
     changeinfo
   end
