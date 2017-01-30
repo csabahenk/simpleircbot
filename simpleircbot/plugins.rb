@@ -216,6 +216,12 @@ class SimpleIrcBot
         }
       end
 
+      def commandAdmin_nick chan, nick, arg
+        say_to chan, okmsg(nick,
+           "attempting to change nick from #{@nick} to #{arg}...")
+        say "NICK #{arg}"
+      end
+
       def commandAdmin_quit chan, nick, arg
         say_to chan, okmsg(nick, "quitting...")
         quit
@@ -231,6 +237,7 @@ class SimpleIrcBot
          ["channels", "-- show channels joined"],
          %w[join <chan>],
          %w[part <chan>],
+         ["nick", "<nick> -- try to change nick to <nick>"],
          ["quit", ""]].each { |l| yield :cmd, *l }
         yield "}"
       end

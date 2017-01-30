@@ -36,10 +36,17 @@ class SimpleIrcBot
       msg = @socket.gets
       puts msg
 
-      if msg.match(/^PING :(.*)$/)
-        say "PONG #{$~[1]}"
-        next
+      earlymatch = true
+      case msg
+      when /^PING :(.*)$/
+        say "PONG #{$1}"
+      when /^:#{Regexp.escape @nick}!.* NICK :(.*)$/
+        @nick = $1.rstrip
+        puts "nick changed to #{@nick}"
+      else
+        earlymatch = false
       end
+      earlymatch and next
 
       chans,privs = @channels.partition {|c| c =~ /^#/ }
 
