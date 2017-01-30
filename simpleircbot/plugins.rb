@@ -1,3 +1,5 @@
+require "json"
+
 class SimpleIrcBot
 
   module Plugins
@@ -248,9 +250,96 @@ class SimpleIrcBot
 ######################################################################################
 
 
+    module Options
+      include Commands
+      include Admin
+
+      Boolean = [FalseClass, TrueClass]
+
+      module ReadOnly
+      end
+
+      def initialize **opts
+        @options = {}
+        make_options { |o| @options.merge! o }
+        super
+      end
+
+      def make_options
+        yield greeting: Boolean, server: ReadOnly, port: ReadOnly, nick: ReadOnly,
+              admins: ReadOnly, channels: ReadOnly
+      end
+
+      def commandAdmin_options chan, nick, arg
+        pat = /#{arg}/
+        say_to chan, okmsg(nick, "options {")
+        @options.keys.grep(pat).each { |o|
+          say_to chan, "#{o}: #{instance_variable_get("@#{o}").to_json}"
+        }
+        say_to chan, "}"
+      end
+
+      def invalid_option opt, val
+        [false, "invalid value for #{opt}: #{val.inspect}"]
+      end
+
+      def check_option opt,val
+      end
+
+      def set_option opt, val
+        constraint = @options[opt]
+        unless constraint
+          return false, "unknown option #{opt.to_s.inspect}"
+        end
+        constraint = [constraint].flatten
+        if constraint.include? ReadOnly
+          return false, "option #{opt} is read-only"
+        end
+        matchclass = constraint.find { |c| c === val }
+        ok,msg = if matchclass == nil
+          invalid_option opt, val
+        elsif matchclass == NilClass
+          [true, "unset #{opt}"]
+        else
+          [true, "option #{opt} set to #{val.to_json}"]
+        end
+        ok and ret = check_option(opt, val)
+        ret and (ok,msg2,val = ret)
+        ok and instance_variable_set "@#{opt}", val
+        return ok, msg2 || msg
+      end
+
+      def commandAdmin_set_option chan, nick, arg
+        opt,val = arg.split(/[:\s]\s*/, 2)
+        opt = opt.to_sym
+        begin
+          val = JSON.load(val||"")
+        rescue JSON::ParserError
+          say_to chan, errmsg(nick, "can't parse value #{val.inspect}")
+          return
+        end
+        ok,msg = set_option opt, val
+        say_to chan, send(ok ? :okmsg : :errmsg, nick, msg)
+      end
+
+      def help chan
+        super
+        return unless is_admin? chan
+        yield :cmd, "options", "[<pattern>] -- show options (matching <pattern> if given)"
+        yield :cmd, "set-option", "<option> [<value>] -- set/unset <option>"
+      end
+
+   end
+
+
+
+######################################################################################
+
+
     module Cache
       include Commands
       include Admin
+      include Options
 
       def initialize(cache: {}, cache_expiry: nil,
                      cache_file: nil, **opts)
@@ -258,6 +347,18 @@ class SimpleIrcBot
         @cache_expiry = (cache_expiry||0) <= 0 ? nil : cache_expiry
         @cache_file = cache_file
         super **opts
+      end
+
+      def make_options
+        super
+        yield cache_expiry: [Integer, NilClass], cache_file: [String, NilClass]
+      end
+
+      def check_option opt, val
+        if opt == :cache_file and (val||"").include? "/"
+          return false, "cache file can't contain '/'"
+        end
+        super
       end
 
       def cache_get key, verbose: false, raw: false

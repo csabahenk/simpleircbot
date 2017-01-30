@@ -16,6 +16,7 @@ class BugzillaGerritBot < SimpleIrcBot
   include SimpleIrcBot::Plugins::Commands
   include SimpleIrcBot::Plugins::Admin
   include SimpleIrcBot::Plugins::Cache
+  include SimpleIrcBot::Plugins::Options
 
   def initialize(
         bugzilla_url:, gerrit_url: ,
@@ -23,15 +24,40 @@ class BugzillaGerritBot < SimpleIrcBot
         gerrit_user: nil, gerrit_port: 29418,
         hush: nil,
         **opts)
-    @bugzilla = bugzilla_url.sub(%r@\Ahttps?://@, "")
+    @bugzilla_url = bugzilla_url.sub(%r@\Ahttps?://@, "")
     @bugzilla_alt = bugzilla_alt
     @gerrit_user = gerrit_user
-    @gerrit = gerrit_url.sub(%r@\Ahttps?://@, "")
+    @gerrit_url = gerrit_url.sub(%r@\Ahttps?://@, "")
     @gerrit_alt = gerrit_alt
     @gerrit_port = gerrit_port
     @hush = (hush||0) <= 0 ? nil : hush
     @accesslog = {}
     super **opts
+  end
+
+  def make_options
+    super
+    yield(
+      bugzilla_url: String,
+      gerrit_url: String,
+      bugzilla_alt: Array,
+      gerrit_alt: Array,
+      gerrit_user: [String, NilClass],
+      gerrit_port: Integer,
+      hush: [Integer, NilClass]
+    )
+  end
+
+  def check_option opt, val
+    case opt
+    when :bugzilla_alt,:gerrit_alt
+      unless (val.map(&:class) - [String]).empty?
+        return invalid_option(opt, val)
+      end
+    when :bugzilla_url,:gerrit_url
+      return true, nil, value.sub(%r@\Ahttps?://@, "")
+    end
+    super
   end
 
   def greet chan
@@ -67,7 +93,7 @@ class BugzillaGerritBot < SimpleIrcBot
   end
 
   def bugzilla_url bz
-    "https://#{@bugzilla}/#{bz}"
+    "https://#{@bugzilla_url}/#{bz}"
   end
 
   def fetch_bugzilla bz
@@ -85,8 +111,9 @@ class BugzillaGerritBot < SimpleIrcBot
   end
 
   def fetch_gerrit change
+    user_prefix = @gerrit_user ? "#{@gerrit_user}@" : ""
     changedata = IO.popen(
-      ["ssh", "#{@gerrit_user}@#{@gerrit}", "-p", "#{@gerrit_port}",
+      ["ssh", "#{user_prefix}#{@gerrit_url}", "-p", "#{@gerrit_port}",
        %w[gerrit query --format=json --patch-sets], change].flatten, &:read)
     changeinfo = begin
       # what comes is a JSON stream, ie. concatenated JSON objects,
@@ -107,12 +134,12 @@ class BugzillaGerritBot < SimpleIrcBot
 
   BUGZILLA_TOKENS = %w[bz bug bugzilla]
   def _BUGZILLA_RX
-    %r@(?:(?:#{SimpleIrcBot.regexp_join @bugzilla, @bugzilla_alt})/(?:show_bug.cgi\?id=)?|(?:\A|\s)(?:#{BUGZILLA_TOKENS.join "|"})[:\s]\s*)(\d+)@i
+    %r@(?:(?:#{SimpleIrcBot.regexp_join @bugzilla_url, @bugzilla_alt})/(?:show_bug.cgi\?id=)?|(?:\A|\s)(?:#{BUGZILLA_TOKENS.join "|"})[:\s]\s*)(\d+)@i
   end
 
   GERRIT_TOKENS = %w[change review gerrit]
   def _GERRIT_RX
-    %r@(?:(?:#{SimpleIrcBot.regexp_join @gerrit, @gerrit_alt})/(?:#/c/)?|(?:\A|\s)(?:#{GERRIT_TOKENS.join "|"})[:\s]\s*)(\d+|I?[\da-f]{6,})@i
+    %r@(?:(?:#{SimpleIrcBot.regexp_join @gerrit_url, @gerrit_alt})/(?:#/c/)?|(?:\A|\s)(?:#{GERRIT_TOKENS.join "|"})[:\s]\s*)(\d+|I?[\da-f]{6,})@i
   end
 
   TOKEN_MAP = {bugzilla: BUGZILLA_TOKENS, gerrit: GERRIT_TOKENS}.map { |tv,ta|
@@ -193,9 +220,9 @@ class BugzillaGerritBot < SimpleIrcBot
      %@"#{GERRIT_TOKENS.join "|"} <change-id>" for Gerrit.@,
      "Case does not matter and a colon separator is also accepted,",
      %@So "BZ:23432" and "Gerrit: 42355" are fine too.@,
-     "URLs like #{@bugzilla}/23432 and #{@gerrit}/42355 are understood,",
-     "and also variants like #{@bugzilla}/show-bug.cgi?id=23432 and",
-     "#{@gerrit}/#/c/42355.",
+     "URLs like #{@bugzilla_url}/23432 and #{@gerrit_url}/42355 are understood,",
+     "and also variants like #{@bugzilla_url}/show-bug.cgi?id=23432 and",
+     "#{@gerrit_url}/#/c/42355.",
      " ",
      "Besides the following service commands are taken:"].each { |l| yield l }
     [["refetch", "<bugzilla or gerrit ref>, ... -- refetch refs"],
@@ -243,7 +270,7 @@ class BugzillaGerritBot < SimpleIrcBot
           bugs.delete bz
         }
       else
-        say_to chan, "#{@gerrit}: change #{change} not found"
+        say_to chan, "#{@gerrit_url}: change #{change} not found"
       end
     }
 

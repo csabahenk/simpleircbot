@@ -1,5 +1,4 @@
 require 'socket'
-require 'set'
 
 
 ######################################################################################
@@ -22,7 +21,7 @@ class SimpleIrcBot
     @port = port
     @nick = nick
     @greeting = greeting
-    @channels = Set.new
+    @channels = []
   end
 
   def connect
