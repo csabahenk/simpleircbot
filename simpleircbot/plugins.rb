@@ -250,24 +250,86 @@ class SimpleIrcBot
 ######################################################################################
 
 
+    module FileOp
+      include Commands
+      include Admin
+
+      def initialize data_dir: nil, **opts
+        @data_dir = data_dir
+        super **opts
+      end
+
+      def fileop_generic file: nil, ok:, err:
+        unless @data_dir
+          return false, "error: file operations disabled"
+        end
+        unless file
+          return nil, "no file specified"
+        end
+        begin
+          yield File.join(@data_dir, file)
+          [true, "#{ok} #{file}"]
+        rescue SystemCallError => x
+          [false, "error: #{err} #{file}: #{x}"]
+        end
+      end
+
+      def load_data_file data:, datadesc: "data", **opts
+        fileop_generic(
+        ok: "loaded #{datadesc} from",
+        err: "failed to load #{datadesc} from", **opts) { |file|
+          data.merge! YAML.load_file file
+        }
+      end
+
+      def save_data_file data:, datadesc: "data", **opts
+        fileop_generic(
+        ok: "saved #{datadesc} to",
+        err: "failed to save #{datadesc} to", **opts) { |file|
+          open("#{file}.tmp", File::WRONLY|File::CREAT|File::EXCL) { |f|
+            f << data.to_yaml
+          }
+          File.rename "#{file}.tmp", file
+        }
+      end
+
+      def commandAdminFileopGeneric chan, nick, arg, op, data, **opts
+        if (arg||"").include? "/"
+          [false, errmsg(nick, "name of target file can't contain '/'")]
+        else
+          opts[:file] = arg
+          ok,msg = send "#{op}_data_file", data: data, **opts
+          [ok, send(ok ? :okmsg : :errmsg, nick, msg)]
+        end
+      end
+
+    end
+
+
+######################################################################################
+
+
     module Options
       include Commands
       include Admin
+      include FileOp
 
       Boolean = [FalseClass, TrueClass]
 
       module ReadOnly
       end
 
-      def initialize **opts
+      def initialize config_file: nil, **opts
+        @config_file = config_file
         @options = {}
         make_options { |o| @options.merge! o }
-        super
+        super **opts
       end
 
       def make_options
-        yield greeting: Boolean, server: ReadOnly, port: ReadOnly, nick: ReadOnly,
-              admins: ReadOnly, channels: ReadOnly
+        yield greeting: Boolean, config_file: [String, NilClass],
+              server: ReadOnly, port: ReadOnly, nick: ReadOnly,
+              admins: ReadOnly, channels: ReadOnly, data_dir: ReadOnly
       end
 
       def commandAdmin_options chan, nick, arg
@@ -322,11 +384,35 @@ class SimpleIrcBot
         say_to chan, send(ok ? :okmsg : :errmsg, nick, msg)
       end
 
+      def commandAdmin_load_options chan, nick, arg
+        data = {}
+        file = @config_file && File.basename(@config_file)
+        ok,msg = commandAdminFileopGeneric(chan, nick, arg||file, "load",
+                                           data, datadesc: "options")
+        if ok
+          data.each { |o,v|
+            ok,msg2 = set_option o.to_sym,v
+            ok or return say_to chan, errmsg(nick, msg2)
+          }
+        end
+        say_to chan, msg
+      end
+
+      def commandAdmin_save_options chan, nick, arg
+        options = @options.keys.map { |o| [o.to_s, instance_variable_get("@#{o}")] }.to_h
+        file = @config_file && File.basename(@config_file)
+        _,msg = commandAdminFileopGeneric(chan, nick, arg||file, "save",
+                                          options, datadesc: "options")
+        say_to chan, msg
+      end
+
       def help chan
         super
         return unless is_admin? chan
         yield :cmd, "options", "[<pattern>] -- show options (matching <pattern> if given)"
         yield :cmd, "set-option", "<option> [<value>] -- set/unset <option>"
+        yield :cmd, "load-options", "[<file>] -- loads options from <file> or default location"
+        yield :cmd, "save-options", "[<file>] -- saves options to <file> or default location"
       end
 
    end
@@ -339,6 +425,7 @@ class SimpleIrcBot
     module Cache
       include Commands
       include Admin
+      include FileOp
       include Options
 
       def initialize(cache: {}, cache_expiry: nil,
@@ -397,6 +484,10 @@ class SimpleIrcBot
         @cache.clear
       end
 
+      def purge_cache
+        @cache.each_key { |k| cache_get k }
+      end
+
       def cache_provide key
         value = cache_get key, verbose: true
         value == nil or return value
@@ -404,37 +495,15 @@ class SimpleIrcBot
         cache_add key, value
       end
 
-      def cachefileop_generic cache_file: @cache_file, ok:, err:
-        unless cache_file
-          return nil, "no cache file specified"
-        end
-        # purge cache from expired records
-        @cache.each_key { |k| cache_get k }
-        begin
-          yield cache_file
-          [true, "#{ok} #{cache_file}"]
-        rescue SystemCallError => x
-          [false, "error: #{err} #{cache_file}: #{x}"]
-        end
+      def load_cache file: @cache_file
+        load_data_file data: @cache, datadesc: "cache",
+                       file: file
       end
 
-      def load_cache **opts
-        cachefileop_generic(
-        ok: "loaded cache from",
-        err: "failed to load cache from", **opts) { |cache_file|
-          @cache.merge! YAML.load_file cache_file
-        }
-      end
-
-      def save_cache **opts
-        cachefileop_generic(
-        ok: "saved cache to",
-        err: "failed to save cache to", **opts) { |cache_file|
-          open("#{cache_file}.tmp", File::WRONLY|File::CREAT|File::EXCL) { |f|
-            f << @cache.to_yaml
-          }
-          File.rename "#{cache_file}.tmp", cache_file
-        }
+      def save_cache file: @cache_file
+        purge_cache
+        save_data_file data: @cache, datadesc: "cache",
+                       file: file
       end
 
       def commandAdmin_drop_cache chan, nick, arg
@@ -442,27 +511,24 @@ class SimpleIrcBot
         say_to chan, okmsg(nick, "dropped cache")
       end
 
-      def commandAdminCacheFileopGeneric chan, nick, arg, op
-        if (arg||"").include? "/"
-          say_to chan, errmsg(nick, "name of target file can't contain '/'")
-        else
-          saveopts = arg ? {cache_file: arg} : {}
-          ok,msg = send "#{op}_cache", **saveopts
-          say_to chan, send(ok ? :okmsg : :errmsg, nick, msg)
-        end
-      end
-
       def commandAdmin_load_cache chan, nick, arg
-        commandAdminCacheFileopGeneric chan, nick, arg, "load"
+        file = @cache_file && File.basename(@cache_file)
+        _,msg = commandAdminFileopGeneric(chan, nick, arg||file, "load",
+                                          @cache, datadesc: "cache")
+        say_to chan, msg
       end
 
       def commandAdmin_save_cache chan, nick, arg
-        commandAdminCacheFileopGeneric chan, nick, arg, "save"
+        purge_cache
+        file = @cache_file && File.basename(@cache_file)
+        _,msg = commandAdminFileopGeneric(chan, nick, arg||file, "save",
+                                          @cache, datadesc: "cache")
+        say_to chan, msg
       end
 
       def command_show_cache chan, nick, arg
-        # Filtering through cache_get enforces a purge of expired items
-        ckeys = @cache.keys.reject{ |k| cache_get(k) == nil }
+        purge_cache
+        ckeys = @cache.keys
         # grouping cache key data (heuristically) to not to overflow message
         say_to chan, okmsg(nick, "cached entries: {")
         arr = []

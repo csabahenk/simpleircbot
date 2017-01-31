@@ -6,7 +6,7 @@ require 'optparse'
 
 module SimpleOpts
 
-  def self.get inopts, config_file_opt: nil, argv: $*
+  def self.get inopts, config_file_opt: nil, keep_config_file: false, argv: $*
     opts = {}
     [inopts].flatten.each { |oh|
       opts.merge! oh.map { |o,d| [o, {default: d}] }.to_h
@@ -32,8 +32,10 @@ module SimpleOpts
        }
     }.parse! argv
     if config_file_opt
-      config_file = (opts.delete(config_file_opt)||{})[:cmdline]
-      if config_file
+      config_file = (opts[config_file_opt]||{}).values_at(
+         :cmdline, :default).compact.first
+      keep_config_file or opts.delete(config_file_opt)
+      unless config_file.to_s.empty?
         YAML.load_file(config_file).each { |k,v|
           (opts[k.to_sym]||{})[:conf] = v
         }

@@ -15,8 +15,9 @@ require 'simpleircbot/plugins'
 class BugzillaGerritBot < SimpleIrcBot
   include SimpleIrcBot::Plugins::Commands
   include SimpleIrcBot::Plugins::Admin
-  include SimpleIrcBot::Plugins::Cache
+  include SimpleIrcBot::Plugins::FileOp
   include SimpleIrcBot::Plugins::Options
+  include SimpleIrcBot::Plugins::Cache
 
   def initialize(
         bugzilla_url:, gerrit_url: ,
@@ -299,11 +300,14 @@ if __FILE__ == $0
     nick: "batty",
     hush: 0,
     admins: [],
+    data_dir: nil,
+  }
+  SHARED_OPTS = {
+    config_file: "",
   }
   MAIN_OPTS = {
     cache_prefetch: [],
     cache_prefetch_gen: "",
-    config_file: "",
     pid_file: "",
     channels: Array,
   }
@@ -314,8 +318,9 @@ if __FILE__ == $0
     port: 6667,
   }
 
-  opts = SimpleOpts.get [BOT_OPTS, MAIN_OPTS, BOT_OPTS2],
-                        config_file_opt: :config_file
+  opts = SimpleOpts.get [BOT_OPTS, SHARED_OPTS, MAIN_OPTS, BOT_OPTS2],
+                        config_file_opt: :config_file,
+                        keep_config_file: true
 
   channels = opts.delete :channels
   if channels.empty?
