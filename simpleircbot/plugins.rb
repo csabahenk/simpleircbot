@@ -319,6 +319,9 @@ class SimpleIrcBot
       module ReadOnly
       end
 
+      module Hidden
+      end
+
       def initialize config_file: nil, **opts
         @config_file = config_file
         @options = {}
@@ -335,8 +338,15 @@ class SimpleIrcBot
       def commandAdmin_options chan, nick, arg
         pat = /#{arg}/
         say_to chan, okmsg(nick, "options {")
-        @options.keys.grep(pat).each { |o|
-          say_to chan, "#{o}: #{instance_variable_get("@#{o}").to_json}"
+        @options.each { |o,c|
+          o =~ pat or next
+          v = instance_variable_get "@#{o}"
+          vrep = if v and c.include?(Hidden)
+            v.to_s.gsub(/./, "*")
+          else
+            v.to_json
+          end
+          say_to chan, "#{o}: #{vrep}"
         }
         say_to chan, "}"
       end

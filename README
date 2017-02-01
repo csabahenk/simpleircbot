@@ -1,6 +1,10 @@
 This is a Simple Irc Bot, customized to resolve
 Bugzilla and Gerrit ids.
 
+It needs the ruby-bugzilla gem, install with
+
+  $ gem install ruby-bugzilla
+
 Just specify the room, the Bugzilla and Gerrit paramenters
 and launch it.
 

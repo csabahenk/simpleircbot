@@ -5,6 +5,10 @@ require 'open-uri'
 require 'cgi'
 require 'yaml'
 
+require 'bugzilla/xmlrpc'
+require 'bugzilla/user'
+require 'bugzilla/bug'
+
 require 'simpleopts'
 require 'simpleircbot/core'
 require 'simpleircbot/plugins'
@@ -23,11 +27,14 @@ class BugzillaGerritBot < SimpleIrcBot
   def initialize(
         bugzilla_url:, gerrit_url: ,
         bugzilla_alt: [], gerrit_alt: [],
+        bugzilla_user: nil, bugzilla_pass: nil,
         gerrit_user: nil, gerrit_port: 29418,
         hush: nil,
         **opts)
     @bugzilla_url = bugzilla_url
     @bugzilla_alt = bugzilla_alt
+    @bugzilla_user = bugzilla_user
+    @bugzilla_pass = bugzilla_pass
     @gerrit_user = gerrit_user
     @gerrit_url = gerrit_url
     @gerrit_alt = gerrit_alt
@@ -44,6 +51,8 @@ class BugzillaGerritBot < SimpleIrcBot
       gerrit_url: String,
       bugzilla_alt: Array,
       gerrit_alt: Array,
+      bugzilla_user: [String, NilClass],
+      bugzilla_pass: [String, NilClass, SimpleIrcBot::Plugins::Options::Hidden],
       gerrit_user: [String, NilClass],
       gerrit_port: Integer,
       hush: [Integer, NilClass]
@@ -107,17 +116,19 @@ class BugzillaGerritBot < SimpleIrcBot
   end
 
   def fetch_bugzilla bz
-    title = "Bug not found :("
-    open(bugzilla_url bz) {|f|
-      while l=f.gets
-        if l =~ %r@<title>(.*)</title>@
-          # CGI.unescapeHTML does not know of ndash :/
-          title = CGI.unescapeHTML $1.gsub("&ndash;", "–")
-          break
-        end
-      end
+    bzurl = bugzilla_url
+    path = bzurl.path.empty? ? nil : bzurl.path
+    xmlrpc = Bugzilla::XMLRPC.new bzurl.host, bzurl.port, path
+    bugdata = nil
+    Bugzilla::User.new(xmlrpc).session(@bugzilla_user, @bugzilla_pass) {
+      bug = Bugzilla::Bug.new(xmlrpc)
+      bugdata = bug.get_bugs(bz)[0]
     }
-    title
+    if bugdata
+      "Bug #{bz} – #{bugdata['summary']}"
+    else
+      "Bug not found :("
+    end
   end
 
   def fetch_gerrit change
@@ -298,6 +309,8 @@ if __FILE__ == $0
   BOT_OPTS = {
     greeting: true,
     bugzilla_alt: [],
+    bugzilla_user: "",
+    bugzilla_pass: "",
     bugzilla_url: String,
     gerrit_user: String,
     gerrit_port: 29418,
