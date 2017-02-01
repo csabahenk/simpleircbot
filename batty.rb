@@ -1,5 +1,6 @@
 #!/usr/bin/env ruby
 
+require 'uri'
 require 'open-uri'
 require 'cgi'
 require 'yaml'
@@ -25,10 +26,10 @@ class BugzillaGerritBot < SimpleIrcBot
         gerrit_user: nil, gerrit_port: 29418,
         hush: nil,
         **opts)
-    @bugzilla_url = bugzilla_url.sub(%r@\Ahttps?://@, "")
+    @bugzilla_url = bugzilla_url
     @bugzilla_alt = bugzilla_alt
     @gerrit_user = gerrit_user
-    @gerrit_url = gerrit_url.sub(%r@\Ahttps?://@, "")
+    @gerrit_url = gerrit_url
     @gerrit_alt = gerrit_alt
     @gerrit_port = gerrit_port
     @hush = (hush||0) <= 0 ? nil : hush
@@ -55,8 +56,6 @@ class BugzillaGerritBot < SimpleIrcBot
       unless (val.map(&:class) - [String]).empty?
         return invalid_option(opt, val)
       end
-    when :bugzilla_url,:gerrit_url
-      return true, nil, value.sub(%r@\Ahttps?://@, "")
     end
     super
   end
@@ -93,8 +92,18 @@ class BugzillaGerritBot < SimpleIrcBot
     send "fetch_#{service}", id
   end
 
-  def bugzilla_url bz
-    "https://#{@bugzilla_url}/#{bz}"
+  def self.make_uri url, *path
+    uri = URI.parse(url)
+    uri.scheme or uri = URI.parse("https://#{url}")
+    URI.join uri, *path
+  end
+
+  def bugzilla_url *path
+    BugzillaGerritBot.make_uri(@bugzilla_url, *path)
+  end
+
+  def gerrit_url *path
+    BugzillaGerritBot.make_uri(@gerrit_url, *path)
   end
 
   def fetch_bugzilla bz
@@ -114,7 +123,7 @@ class BugzillaGerritBot < SimpleIrcBot
   def fetch_gerrit change
     user_prefix = @gerrit_user ? "#{@gerrit_user}@" : ""
     changedata = IO.popen(
-      ["ssh", "#{user_prefix}#{@gerrit_url}", "-p", "#{@gerrit_port}",
+      ["ssh", "#{user_prefix}#{gerrit_url.host}", "-p", "#{@gerrit_port}",
        %w[gerrit query --format=json --patch-sets], change].flatten, &:read)
     changeinfo = begin
       # what comes is a JSON stream, ie. concatenated JSON objects,
@@ -135,12 +144,12 @@ class BugzillaGerritBot < SimpleIrcBot
 
   BUGZILLA_TOKENS = %w[bz bug bugzilla]
   def _BUGZILLA_RX
-    %r@(?:(?:#{SimpleIrcBot.regexp_join @bugzilla_url, @bugzilla_alt})/(?:show_bug.cgi\?id=)?|(?:\A|[^\da-zA-Z_])(?:#{BUGZILLA_TOKENS.join "|"})[:\s]\s*)(\d+)@i
+    %r@(?:(?:#{SimpleIrcBot.regexp_join bugzilla_url.host, @bugzilla_alt})/(?:show_bug.cgi\?id=)?|(?:\A|[^\da-zA-Z_])(?:#{BUGZILLA_TOKENS.join "|"})[:\s]\s*)(\d+)@i
   end
 
   GERRIT_TOKENS = %w[change review gerrit]
   def _GERRIT_RX
-    %r@(?:(?:#{SimpleIrcBot.regexp_join @gerrit_url, @gerrit_alt})/(?:#/c/)?|(?:\A|[^\da-zA-Z_])(?:#{GERRIT_TOKENS.join "|"})[:\s]\s*)(\d+|I?[\da-f]{6,})@i
+    %r@(?:(?:#{SimpleIrcBot.regexp_join gerrit_url.host, @gerrit_alt})/(?:#/c/)?|(?:\A|[^\da-zA-Z_])(?:#{GERRIT_TOKENS.join "|"})[:\s]\s*)(\d+|I?[\da-f]{6,})@i
   end
 
   TOKEN_MAP = {bugzilla: BUGZILLA_TOKENS, gerrit: GERRIT_TOKENS}.map { |tv,ta|
@@ -221,9 +230,9 @@ class BugzillaGerritBot < SimpleIrcBot
      %@"#{GERRIT_TOKENS.join "|"} <change-id>" for Gerrit.@,
      "Case does not matter and a colon separator is also accepted,",
      %@So "BZ:23432" and "Gerrit: 42355" are fine too.@,
-     "URLs like #{@bugzilla_url}/23432 and #{@gerrit_url}/42355 are understood,",
-     "and also variants like #{@bugzilla_url}/show-bug.cgi?id=23432 and",
-     "#{@gerrit_url}/#/c/42355.",
+     "URLs like #{bugzilla_url.host}/23432 and #{gerrit_url.host}/42355 are understood,",
+     "and also variants like #{bugzilla_url.host}/show-bug.cgi?id=23432 and",
+     "#{gerrit_url.host}/#/c/42355.",
      " ",
      "Besides the following service commands are taken:"].each { |l| yield l }
     [["refetch", "<bugzilla or gerrit ref>, ... -- refetch refs"],
@@ -249,7 +258,7 @@ class BugzillaGerritBot < SimpleIrcBot
       buginfo = cache_fetch(:bugzilla, bz)
       unless hushed[:bugzilla, bz]
         @accesslog[[:bugzilla, bz]] = Time.now
-        say_to chan, decor + bugzilla_url(bz), buginfo
+        say_to chan, "#{decor}#{bugzilla_url '/', bz}", buginfo
       end
     }
     bugs = content.scan(_BUGZILLA_RX).flatten.uniq
@@ -271,7 +280,7 @@ class BugzillaGerritBot < SimpleIrcBot
           bugs.delete bz
         }
       else
-        say_to chan, "#{@gerrit_url}: change #{change} not found"
+        say_to chan, "#{gerrit_url.host}: change #{change} not found"
       end
     }
 
