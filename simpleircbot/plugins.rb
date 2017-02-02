@@ -172,7 +172,7 @@ class SimpleIrcBot
         )
       end
 
-      def commandAdmin_admins chan, nick, arg
+      def command_admins chan, nick, arg
         say_to chan, okmsg(nick, "admins: #{@admins.join ", "}")
       end
 
@@ -231,10 +231,10 @@ class SimpleIrcBot
 
       def help chan
         super
+        yield :cmd, "admins", "-- show list of bot admins"
         return unless is_admin? chan
         yield "Admin commands: {"
-        [["admins", "-- show list of admins"],
-         ["add-admin", "<name>"],
+        [["add-admin", "<name>"],
          ["remove-admin", "<name>"],
          ["channels", "-- show channels joined"],
          %w[join <chan>],
@@ -331,7 +331,7 @@ class SimpleIrcBot
 
       def make_options
         yield greeting: Boolean, config_file: [String, NilClass],
-              server: ReadOnly, port: ReadOnly, nick: ReadOnly,
+              server: ReadOnly, port: ReadOnly, nick: ReadOnly, user: ReadOnly,
               admins: ReadOnly, channels: ReadOnly, data_dir: ReadOnly
       end
 

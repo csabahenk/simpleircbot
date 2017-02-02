@@ -16,10 +16,11 @@ class SimpleIrcBot
     nil
   end
 
-  def initialize(server:, port: 6667, nick:, greeting: true)
+  def initialize(server:, port: 6667, nick:, greeting: true, user: nil)
     @server = server
     @port = port
     @nick = nick
+    @user = user
     @greeting = greeting
     @channels = []
   end
@@ -27,7 +28,7 @@ class SimpleIrcBot
   def connect
     @socket = TCPSocket.open(@server, @port)
     say "NICK #{@nick}"
-    say "USER ircbot 0 * #{@nick}"
+    say "USER #{@nick} 0 * :#{@user||"#{@nick} bot"}"
   end
 
   def run

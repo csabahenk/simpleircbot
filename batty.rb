@@ -24,6 +24,8 @@ class BugzillaGerritBot < SimpleIrcBot
   include SimpleIrcBot::Plugins::Options
   include SimpleIrcBot::Plugins::Cache
 
+  REPO = "http://bit.do/battybot"
+
   def initialize(
         bugzilla_url:, gerrit_url: ,
         bugzilla_alt: [], gerrit_alt: [],
@@ -42,6 +44,7 @@ class BugzillaGerritBot < SimpleIrcBot
     @hush = (hush||0) <= 0 ? nil : hush
     @accesslog = {}
     super **opts
+    @user ||= "#{@nick} bot #{REPO}"
   end
 
   def make_options
@@ -253,7 +256,7 @@ class BugzillaGerritBot < SimpleIrcBot
     is_admin?(chan) and yield :cmd, "forget", "-- empty the cache"
     super
     yield " "
-    yield "Drop stars to https://github.com/csabahenk/simpleircbot ;)"
+    yield "Drop stars to #{REPO} ;)"
     # Suppressing drop-cache help as it would confusingly overlap
     # with forget.
     yield :cmd, "drop-cache", nil
@@ -323,6 +326,7 @@ if __FILE__ == $0
     hush: 0,
     admins: [],
     data_dir: nil,
+    user: "",
   }
   SHARED_OPTS = {
     config_file: "",
