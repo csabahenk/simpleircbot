@@ -1,7 +1,7 @@
 #!/usr/bin/env ruby
 
 require 'simpleopts'
-require 'batty'
+require 'bugzillagerritbot'
 
 OPTS = {
   bugzilla_alt: [],

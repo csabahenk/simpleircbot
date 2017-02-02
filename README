@@ -6,11 +6,11 @@ It needs the ruby-bugzilla gem, install with
   $ gem install ruby-bugzilla
 
 Just specify the room, the Bugzilla and Gerrit paramenters
-and launch it.
+and launch "batty".
 
 For writing your own bots:
 - simpleircbot/core.rb is the "framework"
-- see hellobot.rb for an example bot.
+- see example/hellobot.rb for an example bot.
 
 Credit goes to:
  http://kevin.glowacz.info/2009/03/simple-irc-bot-in-ruby.html
