@@ -155,12 +155,12 @@ class BugzillaGerritBot < SimpleIrcBot
 
   BUGZILLA_TOKENS = %w[bz bug bugzilla]
   def _BUGZILLA_RX
-    %r@(?:(?:#{SimpleIrcBot.regexp_join bugzilla_url.host, @bugzilla_alt})/(?:show_bug.cgi\?id=)?|(?:\A|[^\da-zA-Z_])(?:#{BUGZILLA_TOKENS.join "|"})[:\s]\s*)(\d+)@i
+    %r@(?:(?:#{SimpleIrcBot.regexp_join bugzilla_url.host, @bugzilla_alt})/(?:show_bug.cgi\?id=)?|(?:\A|[^\da-zA-Z_])(?:#{BUGZILLA_TOKENS.join "|"})[:#/\s]\s*)(\d+)@i
   end
 
   GERRIT_TOKENS = %w[change review gerrit]
   def _GERRIT_RX
-    %r@(?:(?:#{SimpleIrcBot.regexp_join gerrit_url.host, @gerrit_alt})/(?:#/c/)?|(?:\A|[^\da-zA-Z_])(?:#{GERRIT_TOKENS.join "|"})[:\s]\s*)(\d+|I?[\da-f]{6,})@i
+    %r@(?:(?:#{SimpleIrcBot.regexp_join gerrit_url.host, @gerrit_alt})/(?:#/c/)?|(?:\A|[^\da-zA-Z_])(?:#{GERRIT_TOKENS.join "|"})[:#/\s]\s*)(\d+|I?[\da-f]{6,})@i
   end
 
   TOKEN_MAP = {bugzilla: BUGZILLA_TOKENS, gerrit: GERRIT_TOKENS}.map { |tv,ta|
