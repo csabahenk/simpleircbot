@@ -189,7 +189,7 @@ class BugzillaGerritBot < SimpleIrcBot
     items = []
     scanitems(arg||"") { |ref|
       cache_delete ref
-      @accesslog.delete ref
+      @accesslog.delete([chan] + ref)
       items << ref
     }
     if items.empty?
@@ -260,14 +260,14 @@ class BugzillaGerritBot < SimpleIrcBot
 
   def react_to chan, nick, content
     hushed = proc { |service,id|
-      @hush and (@accesslog[[service, id]]||Time.at(0)) + @hush > Time.now
+      @hush and (@accesslog[[chan, service, id]]||Time.at(0)) + @hush > Time.now
     }
 
     # Bugzilla #1...
     process_bugzilla = proc { |bz,decor=""|
       buginfo = cache_fetch(:bugzilla, bz)
       unless hushed[:bugzilla, bz]
-        @accesslog[[:bugzilla, bz]] = Time.now
+        @accesslog[[chan, :bugzilla, bz]] = Time.now
         say_to chan, "#{decor}#{bugzilla_url '/', bz}", buginfo
       end
     }
@@ -279,7 +279,7 @@ class BugzillaGerritBot < SimpleIrcBot
       if hushed[:gerrit, change]
         next
       else
-        @accesslog[[:gerrit, change]] = Time.now
+        @accesslog[[chan, :gerrit, change]] = Time.now
       end
       case changeinfo
       when Hash
