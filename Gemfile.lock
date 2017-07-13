@@ -1,0 +1,19 @@
+GEM
+  remote: https://rubygems.org/
+  specs:
+    gruff (0.7.0)
+      rmagick (~> 2.13, >= 2.13.4)
+    highline (1.7.8)
+    rmagick (2.16.0)
+    ruby-bugzilla (0.6.4)
+      gruff (~> 0)
+      highline
+
+PLATFORMS
+  ruby
+
+DEPENDENCIES
+  ruby-bugzilla
+
+BUNDLED WITH
+   1.15.1

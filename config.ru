@@ -1,4 +1,4 @@
-#!/usr/bin/env ruby
+$: << Dir.pwd
 
 require 'simpleopts'
 require 'bugzillagerritbot'
@@ -38,6 +38,24 @@ MAIN_OPTS = {
 BOT_OPTS2 = {
   port: 6667,
 }
+
+[BOT_OPTS, SHARED_OPTS, MAIN_OPTS, BOT_OPTS2].each do |h|
+  h.each { |k,v|
+    w = ENV[k.to_s.upcase]
+    w or next
+    h[k] = if v == String or String === v
+      w
+    elsif (v == Integer or Integer === v) and w =~ /\A\d+\Z/
+      Integer(w)
+    elsif v == Array or Array === v
+      w.split ","
+    elsif [true, false].include? v and v =~ /\A(?:(true)|(false))\Z/
+      !!$1
+    else
+      v
+    end
+  }
+end
 
 opts = SimpleOpts.get [BOT_OPTS, SHARED_OPTS, MAIN_OPTS, BOT_OPTS2],
                       config_file_opt: :config_file,
