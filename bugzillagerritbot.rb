@@ -6,6 +6,7 @@ require 'yaml'
 require 'bugzilla/xmlrpc'
 require 'bugzilla/user'
 require 'bugzilla/bug'
+require 'net/ssh'
 
 require 'simpleircbot/core'
 require 'simpleircbot/plugins'
@@ -28,6 +29,7 @@ class BugzillaGerritBot < SimpleIrcBot
         bugzilla_alt: [], gerrit_alt: [],
         bugzilla_user: nil, bugzilla_pass: nil,
         gerrit_user: nil, gerrit_port: 29418,
+        gerrit_sshkeys: [], gerrit_sshkey_data: nil,
         hush: nil,
         **opts)
     @bugzilla_url = bugzilla_url
@@ -39,6 +41,8 @@ class BugzillaGerritBot < SimpleIrcBot
     @gerrit_alt = gerrit_alt
     @gerrit_port = gerrit_port
     @hush = (hush||0) <= 0 ? nil : hush
+    @gerrit_sshkeys = gerrit_sshkeys
+    @gerrit_sshkey_data = gerrit_sshkey_data
     @accesslog = {}
     super **opts
     @user ||= "#{@nick} bot #{REPO}"
@@ -55,6 +59,7 @@ class BugzillaGerritBot < SimpleIrcBot
       bugzilla_pass: [String, NilClass, SimpleIrcBot::Plugins::Options::Hidden],
       gerrit_user: [String, NilClass],
       gerrit_port: Integer,
+      gerrit_sshkeys: Array,
       hush: [Integer, NilClass]
     )
   end
@@ -132,14 +137,21 @@ class BugzillaGerritBot < SimpleIrcBot
   end
 
   def fetch_gerrit change
-    user_prefix = @gerrit_user ? "#{@gerrit_user}@" : ""
-    changedata = IO.popen(
-      ["ssh", "#{user_prefix}#{gerrit_url.host}", "-p", "#{@gerrit_port}",
-       %w[gerrit query --format=json --patch-sets], change].flatten, &:read)
+    sshopts = {auth_methods: %w[publickey]}
+    @gerrit_sshkeys.empty? or sshopts.merge! keys: @gerrit_sshkeys
+    @gerrit_sshkey_data and sshopts.merge! key_data: @gerrit_sshkey_data
+    changedata = nil
+    begin
+      Net::SSH.start(gerrit_url.host, @gerrit_user, **sshopts) do |ssh|
+        changedata = ssh.exec! "gerrit query --format=json --patch-sets #{change}"
+      end
+    rescue Net::SSH::Exception => x
+      puts "WARNING: #{x}"
+    end
     changeinfo = begin
       # what comes is a JSON stream, ie. concatenated JSON objects,
       # but JSON can do only a single object, so instead we use YAML
-      changeinfo = YAML.load changedata
+      changeinfo = YAML.load(changedata||"false")
     rescue Psych::SyntaxError
       false
     end

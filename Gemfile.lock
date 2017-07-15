@@ -2,6 +2,7 @@ GEM
   remote: https://rubygems.org/
   specs:
     highline (1.7.8)
+    net-ssh (4.1.0)
     ruby-bugzilla-thin (0.6.4)
       highline
 
@@ -9,6 +10,7 @@ PLATFORMS
   ruby
 
 DEPENDENCIES
+  net-ssh
   ruby-bugzilla-thin
 
 BUNDLED WITH

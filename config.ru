@@ -12,6 +12,8 @@ BOT_OPTS = {
   bugzilla_url: String,
   gerrit_user: String,
   gerrit_port: 29418,
+  gerrit_sshkeys: [],
+  gerrit_sshkey_data: [],
   gerrit_alt: [],
   gerrit_url: String,
   cache_expiry: 168,
