@@ -33,6 +33,7 @@ MAIN_OPTS = {
   cache_prefetch_gen: "",
   pid_file: "",
   channels: Array,
+  assets: "",
 }
 # at the bottom, so that
 # "--port" gets the "-p"
@@ -74,6 +75,8 @@ gen and cache_prefetch.concat(
   IO.popen(gen, &:read).strip.split(/\s*,\s*/))
 pid_file = opts.delete :pid_file
 pid_file and open(pid_file, "w") { |f| f.puts $$ }
+assets = opts.delete :assets
+assets and Dir.chdir(ENV["HOME"]) { open("|base64 -d | zcat | cpio -id", "w") { |f| f << assets } }
 
 bot = BugzillaGerritBot.new(**opts)
 
