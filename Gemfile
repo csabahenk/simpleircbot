@@ -1,4 +1,4 @@
 source 'https://rubygems.org'
 gem 'rack'
-gem 'ruby-bugzilla-thin'
+gem 'ruby-bugzilla-nomagick'
 gem 'net-ssh'

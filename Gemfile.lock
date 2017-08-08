@@ -4,7 +4,7 @@ GEM
     highline (1.7.8)
     net-ssh (4.1.0)
     rack (2.0.3)
-    ruby-bugzilla-thin (0.6.4)
+    ruby-bugzilla-nomagick (0.6.4.2)
       highline
 
 PLATFORMS
@@ -13,7 +13,7 @@ PLATFORMS
 DEPENDENCIES
   net-ssh
   rack
-  ruby-bugzilla-thin
+  ruby-bugzilla-nomagick
 
 BUNDLED WITH
-   1.15.1
+   1.15.3
