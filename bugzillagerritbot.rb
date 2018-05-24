@@ -130,7 +130,7 @@ class BugzillaGerritBot < SimpleIrcBot
       bugdata = bug.get_bugs(bz)[0]
     }
     if bugdata
-      "Bug #{bz} – #{bugdata['summary']}"
+      bugdata['summary']
     else
       "Bug not found :("
     end
@@ -275,12 +275,26 @@ class BugzillaGerritBot < SimpleIrcBot
       @hush and (@accesslog[[chan, service, id]]||Time.at(0)) + @hush > Time.now
     }
 
+    format_info = proc { |h|
+      s = h["subject"]
+      ["#{h["decor"]}#{h["url"]}",
+       case s
+       when /\A[^"]+\Z/
+         %["#{s}"]
+       when /\A[^']+\Z/
+         "'#{s}'"
+       else
+         s.inspect
+       end]
+    }
+
     # Bugzilla #1...
     process_bugzilla = proc { |bz,decor=""|
       buginfo = cache_fetch(:bugzilla, bz)
       unless hushed[:bugzilla, bz]
         @accesslog[[chan, :bugzilla, bz]] = Time.now
-        say_to chan, "#{decor}#{bugzilla_url '/', bz}", buginfo
+        say_to chan, *format_info.call("decor"=>decor, "url"=>bugzilla_url('/', bz),
+                                       "subject"=>buginfo)
       end
     }
     bugs = content.scan(_BUGZILLA_RX).flatten.uniq
@@ -295,7 +309,7 @@ class BugzillaGerritBot < SimpleIrcBot
       end
       case changeinfo
       when Hash
-        say_to chan, *changeinfo.values_at("url", "subject")
+        say_to chan, *format_info[changeinfo]
         gerrit_get_bugs(changeinfo) {|bz|
           process_bugzilla[bz, "`-> "]
           # We don't need to report this bz once more.
