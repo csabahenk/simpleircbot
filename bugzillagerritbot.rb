@@ -181,8 +181,8 @@ class BugzillaGerritBot < SimpleIrcBot
 
   def gerrit_get_bugs changeinfo
     changeinfo["commitMessage"].each_line {|l|
-      if l =~ /\A\s*#{_BUGZILLA_RX}\s*\Z/
-        yield $1
+      if l =~ /\A(?:(updates|fixes):?)?\s*#{_BUGZILLA_RX}\s*\Z/i
+        yield $2, $1
       end
     }
   end
@@ -310,8 +310,8 @@ class BugzillaGerritBot < SimpleIrcBot
       case changeinfo
       when Hash
         say_to chan, *format_info[changeinfo]
-        gerrit_get_bugs(changeinfo) {|bz|
-          process_bugzilla[bz, "`-> "]
+        gerrit_get_bugs(changeinfo) {|bz, mod|
+          process_bugzilla[bz, "`-> #{mod} ".gsub(/\s+/, " ")]
           # We don't need to report this bz once more.
           bugs.delete bz
         }
