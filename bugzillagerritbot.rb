@@ -28,7 +28,7 @@ class BugzillaGerritBot < SimpleIrcBot
         bugzilla_url:, gerrit_url: ,
         bugzilla_alt: [], gerrit_alt: [],
         bugzilla_user: nil, bugzilla_pass: nil,
-        gerrit_user: nil, gerrit_port: 29418,
+        gerrit_user: nil, gerrit_port: 29418, gerrit_project: nil,
         gerrit_sshkeys: [], gerrit_sshkey_data: nil,
         hush: nil,
         **opts)
@@ -40,6 +40,7 @@ class BugzillaGerritBot < SimpleIrcBot
     @gerrit_url = gerrit_url
     @gerrit_alt = gerrit_alt
     @gerrit_port = gerrit_port
+    @gerrit_project = gerrit_project
     @hush = (hush||0) <= 0 ? nil : hush
     @gerrit_sshkeys = gerrit_sshkeys
     @gerrit_sshkey_data = gerrit_sshkey_data
@@ -59,6 +60,7 @@ class BugzillaGerritBot < SimpleIrcBot
       bugzilla_pass: [String, NilClass, SimpleIrcBot::Plugins::Options::Hidden],
       gerrit_user: [String, NilClass],
       gerrit_port: Integer,
+      gerrit_project: [String, NilClass],
       gerrit_sshkeys: Array,
       hush: [Integer, NilClass]
     )
@@ -172,7 +174,7 @@ class BugzillaGerritBot < SimpleIrcBot
 
   GERRIT_TOKENS = %w[change review gerrit]
   def _GERRIT_RX
-    %r@(?:(?:#{SimpleIrcBot.regexp_join gerrit_url.host, @gerrit_alt})/(?:#/c/)?|(?:\A|[^\da-zA-Z_])(?:#{GERRIT_TOKENS.join "|"})[:#/\s]\s*)(\d+|I?[\da-f]{6,})@i
+    %r@(?:(?:#{SimpleIrcBot.regexp_join gerrit_url.host, @gerrit_alt})/(?:#/c/|(?:#/)?c/#{@gerrit_project||'[\w-]+'}/\+/)?|(?:\A|[^\da-zA-Z_])(?:#{GERRIT_TOKENS.join "|"})[:#/\s]\s*)(\d+|I?[\da-f]{6,})@i
   end
 
   TOKEN_MAP = {bugzilla: BUGZILLA_TOKENS, gerrit: GERRIT_TOKENS}.map { |tv,ta|
