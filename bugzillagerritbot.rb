@@ -129,12 +129,31 @@ class BugzillaGerritBot < SimpleIrcBot
     bugdata = nil
     Bugzilla::User.new(xmlrpc).session(@bugzilla_user, @bugzilla_pass) {
       bug = Bugzilla::Bug.new(xmlrpc)
-      bugdata = bug.get_bugs(bz)[0]
+      bugdata = begin
+        bug.get_bugs(bz, nil)
+      rescue XMLRPC::FaultException
+        []
+      end[0]
     }
     if bugdata
-      bugdata['summary']
+      {"summary"=>bugdata['summary'],
+       "stats"=>"%{product}:%{version}/%{component} %{status}:%{assigned_to} %{priority}&%{severity} %{creation_time} >> %{last_change_time}, %{comments} comments" % bugdata.map { |k,v|
+          [k.to_sym,
+           case k
+           when 'version', 'component'
+             v.join ","
+           when 'assigned_to'
+             v.sub /@.*/, ""
+           when 'creation_time', 'last_change_time'
+             v.to_time
+           when 'comments'
+             v.size - 1
+           else
+             v
+           end]
+       }.to_h}
     else
-      "Bug not found :("
+      {"summary"=>"Bug not found :("}
     end
   end
 
@@ -295,8 +314,8 @@ class BugzillaGerritBot < SimpleIrcBot
       buginfo = cache_fetch(:bugzilla, bz)
       unless hushed[:bugzilla, bz]
         @accesslog[[chan, :bugzilla, bz]] = Time.now
-        say_to chan, *format_info.call("decor"=>decor, "url"=>bugzilla_url('/', bz),
-                                       "subject"=>buginfo)
+        say_to chan, *[format_info.call("decor"=>decor, "url"=>bugzilla_url('/', bz),
+                                        "subject"=>buginfo["summary"]), buginfo["stats"]].compact
       end
     }
     bugs = content.scan(_BUGZILLA_RX).flatten.uniq
